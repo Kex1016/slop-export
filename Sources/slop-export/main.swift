@@ -8,7 +8,7 @@ struct SlopExport: AsyncParsableCommand {
         commandName: "slop-export",
         abstract: "Export Proton Mail (through Proton Mail Bridge) to iCloud Mail.",
         version: SlopVersion.current,
-        subcommands: [ProbeCommand.self, ExportCommand.self, VerifyCommand.self, UploadCommand.self]
+        subcommands: [ProbeCommand.self, ExportCommand.self, MboxCommand.self, VerifyCommand.self, UploadCommand.self]
     )
 }
 
@@ -51,8 +51,56 @@ struct ProbeCommand: AsyncParsableCommand {
 }
 
 struct ExportCommand: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(commandName: "export", abstract: "Download every message into a local store (Phase 3).")
-    func run() async throws { throw ValidationError("export is not built yet (PLAN.md Phase 3).") }
+    static let configuration = CommandConfiguration(
+        commandName: "export",
+        abstract: "Download every message into a local store. Safe to stop and re-run; it resumes.")
+
+    @OptionGroup var bridge: BridgeOptions
+    @Option(help: "Export folder (store/, journal.jsonl, manifest.json).") var out: String
+
+    func run() async throws {
+        let password = try DefaultSecrets().require(.bridge, account: bridge.user)
+        let exporter = try Exporter(directory: URL(fileURLWithPath: out), settings: bridge.settings, password: password) { p in
+            let line: String
+            switch p.phase {
+            case .downloading: line = "\(p.mailbox ?? ""): \(p.done)/\(p.total)"
+            case .scanning: line = "Scanning \(p.mailbox ?? "")"
+            case .connecting: line = p.message ?? "Connecting"
+            case .matching: line = "Matching \(p.mailbox ?? "")"
+            case .writingManifest: line = "Writing manifest"
+            case .done: line = "Done"
+            }
+            FileHandle.standardError.write(Data((line + "\n").utf8))
+        }
+        let summary = try await exporter.run()
+        print("""
+            Distinct messages: \(summary.distinctMessages)
+            Downloaded this run: \(summary.downloadedThisRun)
+            Matched without download: \(summary.matchedWithoutDownload)
+            Unfiled (only in All Mail): \(summary.unfiled)
+            Skipped (server refused them): \(summary.skipped)
+            """)
+    }
+}
+
+struct MboxCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "mbox",
+        abstract: "Build Apple Mail .mbox bundles from an export (Path A). Needs no connection.")
+
+    @Option(help: "Export folder written by `export`.") var export: String
+    @Option(help: "Where to write the .mbox bundles. Replaced if it exists.") var out: String
+
+    func run() async throws {
+        let dir = URL(fileURLWithPath: export)
+        let state = try ExportState.load(from: dir)
+        let result = try MboxWriter(store: MessageStore(root: dir.appendingPathComponent("store"))).write(
+            state: state, to: URL(fileURLWithPath: out))
+        for (mailbox, count) in result.mailboxes.sorted(by: { $0.key < $1.key }) {
+            print("\(mailbox): \(count)")
+        }
+        print("\(result.messages) messages, \(ProbeFormatter.byteString(result.bytes)) in \(result.mailboxes.count) mailboxes")
+    }
 }
 
 struct VerifyCommand: AsyncParsableCommand {

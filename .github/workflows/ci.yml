@@ -50,6 +50,9 @@ jobs:
   macos:
     name: macOS (app, UI tests, package)
     runs-on: macos-15
+    defaults:
+      run:
+        shell: bash  # adds -o pipefail, so a failed xcodebuild piped into xcbeautify fails the step
     steps:
       - uses: actions/checkout@v4
       - name: Tools
@@ -64,11 +67,11 @@ jobs:
         run: |
           xcodebuild -project App/SlopExport.xcodeproj -scheme SlopExport -configuration Release \
             -destination 'generic/platform=macOS' -derivedDataPath build \
-            ONLY_ACTIVE_ARCH=NO build | xcbeautify || exit ${PIPESTATUS[0]}
+            ONLY_ACTIVE_ARCH=NO build | xcbeautify
       - name: UI tests
         run: |
           xcodebuild -project App/SlopExport.xcodeproj -scheme SlopExport -configuration Debug \
-            -destination 'platform=macOS' -derivedDataPath build-tests test | xcbeautify || exit ${PIPESTATUS[0]}
+            -destination 'platform=macOS' -derivedDataPath build-tests test | xcbeautify
       - name: Check the app is universal and sandboxed
         run: |
           APP=build/Build/Products/Release/SlopExport.app

@@ -21,6 +21,28 @@ David can overrule any entry by saying so in the project. The agent then adds a 
 
 ## Entries
 
+### D-010: Apple Mail output format
+- Date: 2026-11-02
+- Status: accepted
+- Phase: 4
+- Context: PLAN.md Phase 4 needs `.mbox` bundles Apple Mail can import, with flags and dates kept, split if too big.
+- Options: one flat `mbox` file per folder; Apple Mail's own bundle layout (`Name.mbox/mbox`, subfolders nested inside the parent bundle).
+- Decision: Apple Mail's bundle layout. mboxrd escaping, LF line endings, messages ordered by INTERNALDATE, `From slop-export@localhost <asctime UTC>` separators, `Status: RO` for read and `X-Status` with `A`/`F`/`T` for answered/flagged/draft (any existing Status headers are replaced). Mailboxes over 1 GiB split into `Name (2).mbox`, etc. Folder names are sanitised so they cannot escape the output folder (`..`, `/`, leading dots).
+- Why: matches what Mail itself exports, so `File > Import Mailboxes > Apple Mail` takes the whole tree at once. 1 GiB is a conservative guess at where Mail's importer gets slow; to be revisited after MT-004.
+- Reversible: yes; the mbox output is rebuilt from the store each time.
+- PR: (Phase 3-4 PR)
+
+### D-009: Match All Mail and Starred by Message-ID and size instead of downloading twice
+- Date: 2026-11-02
+- Status: accepted
+- Phase: 3
+- Context: Every message is in a real folder and again in Bridge's All Mail (and Starred). Downloading All Mail in full would double the download, and Bridge is slow.
+- Options: download everything and dedupe by hash; fetch only Message-ID and size for All Mail and Starred, and download just the ones that match nothing.
+- Decision: real folders are downloaded first. All Mail and Starred are then fetched as metadata plus the Message-ID header, and each entry is matched to a stored message with the same Message-ID and size. A stored message can stand for as many entries as it has real-folder copies, so two identical messages are never merged. Anything that does not match, including every message without a Message-ID, is downloaded and hashed. All Mail-only messages become `Unfiled`.
+- Why: on the fixture this downloads 13 bodies for 12 All Mail messages instead of 25. Bridge serves the same Proton message in each mailbox, so Message-ID plus size identifies it. `verify` (Phase 6) re-checks counts per folder.
+- Reversible: yes; drop the match and every All Mail entry is downloaded.
+- PR: (Phase 3-4 PR)
+
 ### D-008: Keep the Bridge certificate's bytes, not a bookmark to the file
 - Date: 2026-11-02
 - Status: accepted

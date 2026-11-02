@@ -8,7 +8,10 @@ public struct FetchRecord: Sendable, Hashable {
     public var flags: [String] = []
     public var internalDate: ServerMessageDate?
     public var size: Int?
+    /// The whole message (BODY[] / RFC822).
     public var body: ByteBuffer?
+    /// Any partial section, such as BODY[HEADER.FIELDS (MESSAGE-ID)].
+    public var headerFields: ByteBuffer?
 }
 
 /// Everything the server said in response to one tagged command.
@@ -38,6 +41,7 @@ final class ResponseCollector: ChannelDuplexHandler {
         var promise: EventLoopPromise<CommandResult>
         var result = CommandResult()
         var currentFetch: FetchRecord?
+        var streamingWhole = true
         var idleLimit: TimeAmount
         var timeout: Scheduled<Void>?
     }
@@ -127,11 +131,23 @@ final class ResponseCollector: ChannelDuplexHandler {
             case .rfc822Size(let size): inFlight!.currentFetch?.size = size
             default: break
             }
-        case .streamingBegin(_, let byteCount):
-            inFlight!.currentFetch?.body = ByteBuffer()
-            inFlight!.currentFetch?.body?.reserveCapacity(byteCount)
+        case .streamingBegin(let kind, let byteCount):
+            var buffer = ByteBuffer()
+            buffer.reserveCapacity(byteCount)
+            switch kind {
+            case .rfc822, .body(section: .complete, offset: nil):
+                inFlight!.streamingWhole = true
+                inFlight!.currentFetch?.body = buffer
+            default:
+                inFlight!.streamingWhole = false
+                inFlight!.currentFetch?.headerFields = buffer
+            }
         case .streamingBytes(var bytes):
-            inFlight!.currentFetch?.body?.writeBuffer(&bytes)
+            if inFlight!.streamingWhole {
+                inFlight!.currentFetch?.body?.writeBuffer(&bytes)
+            } else {
+                inFlight!.currentFetch?.headerFields?.writeBuffer(&bytes)
+            }
         case .streamingEnd:
             break
         case .finish:
