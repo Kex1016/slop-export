@@ -1,0 +1,12 @@
+.build/
+.swiftpm/
+DerivedData/
+build/
+*.xcodeproj/
+.env
+*.pem
+*.crt
+!Fixtures/**
+export/
+exports/
+__pycache__/

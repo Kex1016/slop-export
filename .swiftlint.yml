@@ -1,0 +1,25 @@
+included:
+  - Sources
+  - Tests
+  - App
+excluded:
+  - .build
+  - build
+line_length:
+  warning: 160
+  error: 200
+  ignores_comments: true
+identifier_name:
+  excluded: [i, id, ok, to, at, fx, p, s, k, v, u, n]
+type_body_length:
+  warning: 400
+file_length:
+  warning: 600
+function_body_length:
+  warning: 80
+disabled_rules:
+  - todo
+  - force_unwrapping
+  - trailing_comma
+  - opening_brace
+  - cyclomatic_complexity
