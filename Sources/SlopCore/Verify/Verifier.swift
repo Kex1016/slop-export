@@ -219,9 +219,12 @@ public enum Verifier {
     /// Split parts ("Name (2).mbox") are added to their folder. Used when there is no index.
     static func countMboxes(in root: URL) -> [String: Int] {
         var out: [String: Int] = [:]
+        // Resolve symlinks on both sides: on macOS the enumerator reports /private/var/... for /var/....
+        let base = root.resolvingSymlinksInPath().pathComponents
         guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return out }
         for case let url as URL in walker where url.lastPathComponent == "mbox" {
-            let relative = url.deletingLastPathComponent().path.dropFirst(root.path.count)
+            let relative = url.deletingLastPathComponent().resolvingSymlinksInPath().pathComponents
+                .dropFirst(base.count).joined(separator: "/")
             let folder = relative.split(separator: "/").map { component -> String in
                 var name = String(component.dropLast(".mbox".count))
                 if let range = name.range(of: #" \(\d+\)$"#, options: .regularExpression) { name.removeSubrange(range) }
