@@ -44,18 +44,25 @@ public enum MailboxPlan {
             guard components.count > 1 else { return .container }
             return .export(target: folderTarget(Array(components.dropFirst())))
         }
-        // Anything Bridge adds that the plan does not know about is kept under its own name.
-        return .export(target: components)
+        // Anything Bridge adds that the plan does not know about is kept under its own name,
+        // with the same clash protection as custom folders.
+        return .export(target: folderTarget(components))
     }
 
-    /// Custom folders keep their nesting. One that would land on a system folder's iCloud name
-    /// (a custom folder called "Archive" or "Junk", or anything below one) goes under `Proton Folders/` instead so the
-    /// two never merge.
+    /// Parent for custom folders whose name clashes with an iCloud system folder (D-007).
+    public static let clashParent = "Proton Folders"
+
+    /// Top-level iCloud names a custom folder must not land on. Compared case-insensitively,
+    /// because iCloud treats `archive` and `Archive` as the same folder.
+    static let reservedTopLevel: Set<String> = Set(
+        (systemTargets.values.compactMap(\.first) + ["INBOX", "Unfiled", clashParent]).map { $0.lowercased() })
+
+    static func isReserved(_ name: String) -> Bool { reservedTopLevel.contains(name.lowercased()) }
+
+    /// Custom folders keep their nesting. One whose top-level name is an iCloud system folder,
+    /// `Unfiled` or `Proton Folders` itself goes under `Proton Folders/` so two folders never merge.
     static func folderTarget(_ path: [String]) -> [String] {
-        let reserved = Set(systemTargets.values.compactMap(\.first)).union(["Unfiled"])
-        if let top = path.first, reserved.contains(top) || top.caseInsensitiveCompare("INBOX") == .orderedSame {
-            return ["Proton Folders"] + path
-        }
+        if let top = path.first, isReserved(top) { return [clashParent] + path }
         return path
     }
 }

@@ -75,7 +75,8 @@ public enum Probe {
         for mailbox in listed {
             let role = MailboxPlan.role(for: mailbox)
             var probed = ProbedMailbox(path: mailbox.displayPath, role: role, attributes: mailbox.attributes)
-            if mailbox.isSelectable {
+            // Labels are listed (acceptance criterion 1) but never opened (D-001).
+            if mailbox.isSelectable, role != .skippedLabel, role != .container {
                 progress?("Counting \(mailbox.displayPath)")
                 let counts = try await client.status(mailbox, size: statusSize)
                 probed.messages = counts.messages

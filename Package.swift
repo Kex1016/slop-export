@@ -22,6 +22,7 @@ let package = Package(
             dependencies: [
                 .product(name: "NIOIMAP", package: "swift-nio-imap"),
                 .product(name: "NIO", package: "swift-nio"),
+                .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "Crypto", package: "swift-crypto"),
             ]
@@ -35,7 +36,10 @@ let package = Package(
         ),
         .testTarget(
             name: "SlopCoreTests",
-            dependencies: ["SlopCore"]
+            dependencies: [
+                "SlopCore",
+                .product(name: "NIOEmbedded", package: "swift-nio"),
+            ]
         ),
     ]
 )

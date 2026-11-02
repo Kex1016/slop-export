@@ -13,6 +13,7 @@ final class ProbeIntegrationTests: XCTestCase {
         XCTAssertEqual(byPath["Folders/Ünïcödé Ordner"]?.messages, 2, "non-ASCII folder names decode")
         XCTAssertEqual(byPath["Folders/Work/Projects"]?.role, .export(target: ["Work", "Projects"]))
         XCTAssertEqual(byPath["Labels/Important"]?.role, .skippedLabel)
+        XCTAssertNil(byPath["Labels/Important"]?.messages, "labels are listed but never opened (D-001)")
         XCTAssertEqual(byPath["Starred"]?.role, .starred)
         XCTAssertEqual(byPath["Folders"]?.role, .container)
         XCTAssertEqual(report.exportedMessageCount, 11)
@@ -44,6 +45,29 @@ final class ProbeIntegrationTests: XCTestCase {
         } catch let error as IMAPError {
             guard case .tls = error else { return XCTFail("expected a TLS error, got \(error)") }
         }
+    }
+
+    func testStartTLSAgainstImplicitTLSPortFailsWithAClearError() async throws {
+        let icloud = try FixtureServer.load("icloud")
+        let pin = try PinnedCertificate(contentsOf: URL(fileURLWithPath: icloud.cert))
+        let endpoint = ServerEndpoint(host: icloud.host, port: icloud.port, tls: .startTLS, trust: .pinned(pin))
+        do {
+            _ = try await IMAPClient.connect(to: endpoint, greetingTimeout: .seconds(2))
+            XCTFail("connected with the wrong security mode")
+        } catch let error as IMAPError {
+            guard case .noGreeting = error else { return XCTFail("expected noGreeting, got \(error)") }
+        }
+    }
+
+    func testImplicitTLSConnects() async throws {
+        let icloud = try FixtureServer.load("icloud")
+        let pin = try PinnedCertificate(contentsOf: URL(fileURLWithPath: icloud.cert))
+        let client = try await IMAPClient.connect(to: ServerEndpoint(host: icloud.host, port: icloud.port, tls: .implicit,
+                                                                     trust: .pinned(pin)))
+        try await client.login(user: icloud.user, password: icloud.password)
+        let names = try await client.list().map(\.displayPath)
+        XCTAssertTrue(names.contains("Sent Messages"))
+        await client.close()
     }
 
     func testWrongPasswordFailsCleanly() async throws {

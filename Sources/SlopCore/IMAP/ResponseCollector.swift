@@ -38,6 +38,7 @@ final class ResponseCollector: ChannelDuplexHandler {
         var promise: EventLoopPromise<CommandResult>
         var result = CommandResult()
         var currentFetch: FetchRecord?
+        var idleLimit: TimeAmount
         var timeout: Scheduled<Void>?
     }
 
@@ -63,11 +64,8 @@ final class ResponseCollector: ChannelDuplexHandler {
                 promise?.fail(err)
                 return
             }
-            var slot = InFlight(tag: tag, promise: p)
-            slot.timeout = context.eventLoop.assumeIsolated().scheduleTask(in: timeout) { [weak self] in
-                self?.timedOut(tag: tag, context: context)
-            }
-            inFlight = slot
+            inFlight = InFlight(tag: tag, promise: p, idleLimit: timeout)
+            armTimeout(context: context)
             for (i, part) in parts.enumerated() {
                 let isLast = i == parts.count - 1
                 context.write(self.wrapOutboundOut(.part(part)), promise: isLast ? promise : nil)
@@ -76,8 +74,20 @@ final class ResponseCollector: ChannelDuplexHandler {
         }
     }
 
+    /// The timeout is an idle timeout: it restarts whenever the server sends anything, so a long
+    /// FETCH that keeps streaming is never cut off, but a server that goes quiet is.
+    private func armTimeout(context: ChannelHandlerContext) {
+        guard let slot = inFlight else { return }
+        slot.timeout?.cancel()
+        let tag = slot.tag
+        inFlight!.timeout = context.eventLoop.assumeIsolated().scheduleTask(in: slot.idleLimit) { [weak self] in
+            self?.timedOut(tag: tag, context: context)
+        }
+    }
+
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let response = self.unwrapInboundIn(data)
+        armTimeout(context: context)
         switch response {
         case .untagged(let payload):
             if greeting == nil, inFlight == nil, case .conditionalState(let status) = payload {

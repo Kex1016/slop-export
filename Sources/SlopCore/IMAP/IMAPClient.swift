@@ -1,5 +1,6 @@
 import Foundation
 import NIO
+import NIOConcurrencyHelpers
 import NIOIMAP
 import NIOSSL
 
@@ -36,6 +37,7 @@ public struct ServerEndpoint: Sendable {
 public enum IMAPError: Error, CustomStringConvertible, Sendable {
     case connectionClosed
     case timeout
+    case noGreeting
     case bye(String)
     case tls(String)
     case commandFailed(command: String, status: String, text: String)
@@ -44,7 +46,10 @@ public enum IMAPError: Error, CustomStringConvertible, Sendable {
     public var description: String {
         switch self {
         case .connectionClosed: return "The server closed the connection."
-        case .timeout: return "The server did not answer in time."
+        case .timeout: return "The server stopped sending data and did not answer in time."
+        case .noGreeting:
+            return "The server did not start an IMAP session. Check the port and the connection security setting "
+                + "(Bridge's default is STARTTLS on 1143; SSL needs the tls setting)."
         case .bye(let text): return "The server ended the session: \(text)"
         case .tls(let text): return "Secure connection failed: \(text)"
         case .commandFailed(let command, let status, let text): return "\(command) failed (\(status)): \(text)"
@@ -90,7 +95,8 @@ public actor IMAPClient {
     private let ownsGroup: Bool
     private var tagCounter = 0
     public private(set) var capabilities: Set<String> = []
-    public var commandTimeout: TimeAmount = .seconds(300)
+    /// How long the server may stay silent during a command.
+    public var commandTimeout: TimeAmount = .seconds(120)
 
     private init(channel: Channel, group: EventLoopGroup, ownsGroup: Bool) {
         self.channel = channel
@@ -100,28 +106,60 @@ public actor IMAPClient {
 
     // MARK: Connecting
 
-    public static func connect(to endpoint: ServerEndpoint, connectTimeout: TimeAmount = .seconds(20)) async throws -> IMAPClient {
+    public static func connect(to endpoint: ServerEndpoint, connectTimeout: TimeAmount = .seconds(20),
+                               greetingTimeout: TimeAmount = .seconds(30)) async throws -> IMAPClient {
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         do {
             let sslContext = try makeSSLContext(trust: endpoint.trust)
-            let implicit = endpoint.tls == .implicit
             let host = endpoint.host
             let trust = endpoint.trust
-            let channel = try await ClientBootstrap(group: group)
-                .connectTimeout(connectTimeout)
-                .channelInitializer { channel in
-                    channel.eventLoop.makeCompletedFuture {
-                        if implicit {
+            let channel: Channel
+            switch endpoint.tls {
+            case .implicit:
+                channel = try await ClientBootstrap(group: group)
+                    .connectTimeout(connectTimeout)
+                    .channelInitializer { channel in
+                        channel.eventLoop.makeCompletedFuture {
                             let tls = try makeTLSHandler(context: sslContext, host: host, trust: trust)
-                            try channel.pipeline.syncOperations.addHandler(tls)
+                            try channel.pipeline.syncOperations.addHandlers([tls, IMAPClientHandler(), ResponseCollector()])
                         }
-                        try channel.pipeline.syncOperations.addHandlers([IMAPClientHandler(), ResponseCollector()])
                     }
+                    .connect(host: endpoint.host, port: endpoint.port)
+                    .get()
+                try await withDeadline(greetingTimeout, on: channel) {
+                    try await awaitGreeting(on: channel)
                 }
-                .connect(host: endpoint.host, port: endpoint.port)
-                .get()
+            case .startTLS:
+                let ready = group.next().makePromise(of: Void.self)
+                channel = try await ClientBootstrap(group: group)
+                    .connectTimeout(connectTimeout)
+                    .channelInitializer { channel in
+                        channel.eventLoop.makeCompletedFuture {
+                            try channel.pipeline.syncOperations.addHandler(StartTLSNegotiator(promise: ready), name: "starttls")
+                        }
+                    }
+                    .connect(host: endpoint.host, port: endpoint.port)
+                    .get()
+                try await withDeadline(greetingTimeout, on: channel) {
+                    try await ready.futureResult.get()
+                }
+                // Swap the plaintext negotiator for TLS and the IMAP codec in one event-loop turn,
+                // so no byte can slip in between.
+                try await channel.eventLoop.submit {
+                    let sync = channel.pipeline.syncOperations
+                    let negotiator = try sync.handler(type: StartTLSNegotiator.self)
+                    sync.removeHandler(negotiator, promise: nil)
+                    let tls = try makeTLSHandler(context: sslContext, host: host, trust: trust)
+                    try sync.addHandlers([tls, IMAPClientHandler(), ResponseCollector()])
+                }.get()
+            }
             let client = IMAPClient(channel: channel, group: group, ownsGroup: true)
-            try await client.handshake(endpoint: endpoint, sslContext: sslContext)
+            do {
+                try await client.refreshCapabilities()
+            } catch {
+                await client.close()
+                throw error
+            }
             return client
         } catch {
             try? await group.shutdownGracefully()
@@ -129,37 +167,49 @@ public actor IMAPClient {
         }
     }
 
-    /// Turns TLS errors into something a person can act on.
+    private static func awaitGreeting(on channel: Channel) async throws {
+        let promise = channel.eventLoop.makePromise(of: UntaggedStatus.self)
+        try await channel.writeAndFlush(CollectorRequest.greeting(promise)).get()
+        switch try await promise.futureResult.get() {
+        case .ok, .preauth: break
+        case .bye(let text), .no(let text), .bad(let text): throw IMAPError.bye(text.text)
+        }
+    }
+
+    /// Closes the channel if `body` has not finished in time, and reports that as `.noGreeting`.
+    /// Covers the classic mistake of STARTTLS against an implicit-TLS port (or the reverse),
+    /// where both sides wait for the other forever.
+    private static func withDeadline<T: Sendable>(_ timeout: TimeAmount, on channel: Channel,
+                                                  _ body: () async throws -> T) async throws -> T {
+        let fired = NIOLockedValueBox(false)
+        let task = channel.eventLoop.scheduleTask(in: timeout) {
+            fired.withLockedValue { $0 = true }
+            channel.close(promise: nil)
+        }
+        defer { task.cancel() }
+        do {
+            return try await body()
+        } catch {
+            if fired.withLockedValue({ $0 }) { throw IMAPError.noGreeting }
+            throw error
+        }
+    }
+
+    /// Turns TLS errors into something a person can act on. Only a failed certificate check is
+    /// blamed on the certificate; anything else is reported as it is.
     static func explain(_ error: Error, trust: TrustPolicy) -> Error {
         guard error is NIOSSLError || error is BoringSSLError else { return error }
+        let text = String(describing: error)
+        guard text.contains("CERTIFICATE_VERIFY_FAILED") else {
+            return IMAPError.tls("the TLS handshake failed (\(text)). Check the port and connection security setting.")
+        }
         switch trust {
         case .pinned(let pin):
             return IMAPError.tls("the server did not present the certificate you chose (SHA-256 \(pin.fingerprint)). "
                 + "Export the certificate again from Bridge and choose the new file.")
         case .system:
-            return IMAPError.tls("the server's certificate is not trusted by macOS (\(error)).")
+            return IMAPError.tls("the server's certificate is not trusted by macOS (\(text)).")
         }
-    }
-
-    private func handshake(endpoint: ServerEndpoint, sslContext: NIOSSLContext) async throws {
-        let promise = channel.eventLoop.makePromise(of: UntaggedStatus.self)
-        try await channel.writeAndFlush(CollectorRequest.greeting(promise)).get()
-        let greeting = try await promise.futureResult.get()
-        switch greeting {
-        case .ok, .preauth: break
-        case .bye(let text), .no(let text), .bad(let text): throw IMAPError.bye(text.text)
-        }
-        if endpoint.tls == .startTLS {
-            try await run(.startTLS)
-            let channel = self.channel
-            let host = endpoint.host
-            let trust = endpoint.trust
-            try await channel.eventLoop.submit {
-                let tls = try makeTLSHandler(context: sslContext, host: host, trust: trust)
-                try channel.pipeline.syncOperations.addHandler(tls, position: .first)
-            }.get()
-        }
-        try await refreshCapabilities()
     }
 
     public func close() async {

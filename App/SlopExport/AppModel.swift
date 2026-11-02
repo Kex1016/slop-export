@@ -37,10 +37,10 @@ final class AppModel {
     // Connect step. Saved in UserDefaults so the app picks up where it left off.
     var host: String { didSet { save() } }
     var port: Int { didSet { save() } }
-    var user: String { didSet { save() } }
+    var user: String { didSet { save(); refreshSavedPassword() } }
     /// DER bytes of the certificate exported from Bridge. Certificates are public; keeping the
     /// bytes avoids holding a security-scoped bookmark to the file.
-    var certificateDER: [UInt8]? { didSet { save() } }
+    var certificateDER: [UInt8]? { didSet { save(); certificateFingerprint = Self.fingerprint(certificateDER) } }
     var certificateName: String? { didSet { save() } }
 
     var isWorking = false
@@ -57,6 +57,8 @@ final class AppModel {
         user = defaults.string(forKey: "bridge.user") ?? ""
         certificateDER = (defaults.data(forKey: "bridge.certificate")).map { Array($0) }
         certificateName = defaults.string(forKey: "bridge.certificateName")
+        certificateFingerprint = Self.fingerprint(certificateDER)
+        refreshSavedPassword()
     }
 
     private func save() {
@@ -67,14 +69,16 @@ final class AppModel {
         defaults.set(certificateName, forKey: "bridge.certificateName")
     }
 
-    var certificateFingerprint: String? {
-        guard let der = certificateDER else { return nil }
-        return try? PinnedCertificate(bytes: der).fingerprint
+    /// Cached so SwiftUI body evaluations never parse certificates or query the Keychain.
+    private(set) var certificateFingerprint: String?
+    private(set) var hasSavedPassword = false
+
+    private static func fingerprint(_ der: [UInt8]?) -> String? {
+        der.flatMap { try? PinnedCertificate(bytes: $0).fingerprint }
     }
 
-    var hasSavedPassword: Bool {
-        guard !user.isEmpty else { return false }
-        return (try? KeychainSecrets().password(.bridge, account: user)) != nil
+    private func refreshSavedPassword() {
+        hasSavedPassword = !user.isEmpty && (try? KeychainSecrets().password(.bridge, account: user)) != nil
     }
 
     var canConnect: Bool { !host.isEmpty && !user.isEmpty && certificateDER != nil && !isWorking }
@@ -94,12 +98,17 @@ final class AppModel {
 
     /// Saves a newly typed password to the Keychain. The text field is cleared by the caller;
     /// the password is never stored anywhere else.
-    func savePassword(_ password: String) {
-        guard !password.isEmpty, !user.isEmpty else { return }
+    /// Returns false (and shows why) if the Keychain refused it.
+    @discardableResult
+    func savePassword(_ password: String) -> Bool {
+        guard !password.isEmpty, !user.isEmpty else { return true }
         do {
             try KeychainSecrets().setPassword(password, .bridge, account: user)
+            refreshSavedPassword()
+            return true
         } catch {
             errorMessage = "Could not save the password to the Keychain: \(error)"
+            return false
         }
     }
 
@@ -116,7 +125,8 @@ final class AppModel {
             let endpoint = ServerEndpoint(host: host, port: port, tls: .startTLS,
                                           trust: .pinned(try PinnedCertificate(bytes: der)))
             let report = try await Probe.run(endpoint: endpoint, user: user, password: password) { line in
-                Task { @MainActor in self.status = line }
+                // Progress hops arrive out of band; drop any that land after the scan ended.
+                Task { @MainActor in if self.isWorking { self.status = line } }
             }
             self.report = report
             status = nil

@@ -48,7 +48,7 @@ struct ConnectView: View {
             Section("Bridge password") {
                 SecureField("Bridge password", text: $password, prompt: Text(model.hasSavedPassword ? "Saved in Keychain" : "From Bridge, not your Proton password"))
                     .accessibilityIdentifier("bridge-password")
-                    .onSubmit(savePassword)
+                    .onSubmit { savePassword() }
             }
 
             Section {
@@ -81,7 +81,7 @@ struct ConnectView: View {
                 }
                 Spacer()
                 Button("Connect and scan") {
-                    savePassword()
+                    guard savePassword() else { return }
                     Task { await model.connectAndScan() }
                 }
                 .keyboardShortcut(.defaultAction)
@@ -96,9 +96,13 @@ struct ConnectView: View {
         }
     }
 
-    private func savePassword() {
-        model.savePassword(password)
+    /// Moves the typed password into the Keychain. The field is cleared only if that worked,
+    /// so a Keychain failure does not lose what was typed.
+    @discardableResult
+    private func savePassword() -> Bool {
+        guard model.savePassword(password) else { return false }
         password = ""
+        return true
     }
 }
 

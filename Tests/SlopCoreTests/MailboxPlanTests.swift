@@ -38,6 +38,19 @@ final class MailboxPlanTests: XCTestCase {
         XCTAssertEqual(role("Folders/Junk/Old"), .export(target: ["Proton Folders", "Junk", "Old"]))
         XCTAssertEqual(role("Folders/inbox"), .export(target: ["Proton Folders", "inbox"]))
         XCTAssertEqual(role("Folders/Unfiled"), .export(target: ["Proton Folders", "Unfiled"]))
+        XCTAssertEqual(role("Folders/archive"), .export(target: ["Proton Folders", "archive"]), "case-insensitive")
+        XCTAssertEqual(role("Folders/Deleted Messages"), .export(target: ["Proton Folders", "Deleted Messages"]))
+    }
+
+    func testClashParentCannotItselfCollide() {
+        let moved = role("Folders/Archive")
+        let userFolder = role("Folders/Proton Folders/Archive")
+        XCTAssertNotEqual(moved, userFolder)
+        XCTAssertEqual(userFolder, .export(target: ["Proton Folders", "Proton Folders", "Archive"]))
+    }
+
+    func testUnknownTopLevelMailboxGetsClashProtection() {
+        XCTAssertEqual(role("Junk"), .export(target: ["Proton Folders", "Junk"]))
     }
 
     func testUnknownTopLevelMailboxIsKept() {
