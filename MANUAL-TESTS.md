@@ -30,12 +30,15 @@ Steps only David can do: sign-ins, anything on his Mac or in his real accounts, 
 These will become full entries when their phase starts:
 
 - Install and sign in to Proton Mail Bridge, let it finish syncing, and export its TLS certificate.
-- Store the Bridge IMAP password in the macOS Keychain under the name the tool expects.
-- Run `slop-export probe` and report mailbox names and counts.
-- Create an iCloud app-specific password at account.apple.com and store it in the Keychain (Path B).
+- Download the app from the GitHub Release, move it to Applications and approve it once under System Settings > Privacy & Security > Open Anyway (ad-hoc signed builds only).
+- Tell the agents whether you have an Apple Developer account, so they can add Developer ID signing and notarization (optional).
+- In the app's Connect step, choose the Bridge certificate and enter the Bridge password (it goes to the Keychain), then report the mailbox names and counts from the Scan step.
+- Approve the app's Keychain prompts the first time, and the folder access prompt for the export folder.
+- Create an iCloud app-specific password at account.apple.com and enter it in the app's Upload step (Path B).
 - Check iCloud storage has room for the export.
 - Import the `.mbox` output in Apple Mail and spot-check (Path A).
 - Approve and watch the first real upload to iCloud (Path B).
+- Quit the app mid-export, reopen it, and confirm it resumes where it stopped.
 - Final check on iPhone or iCloud.com: folders, dates, flags, attachments.
 
 ## Entries
