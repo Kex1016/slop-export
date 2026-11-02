@@ -43,6 +43,49 @@ These will become full entries when their phase starts:
 
 ## Entries
 
+### MT-007: Verify against your real account and sign off
+- Status: pending
+- Added: 2026-11-02 by "Build the Proton to iCloud exporter"
+- Phase / PR: Phase 6, (Phase 5-6 PR)
+- Why David: his account; acceptance criterion 8 is his sign-off
+- Before you start: MT-003 passed. For the iCloud columns, MT-006 passed too. Bridge running.
+- Steps:
+  1. In the app's Verify step, leave both "Compare with…" boxes on and click Verify. It only reads.
+  2. Look at the result line, the numbers at the top and the chart.
+  3. Click "Save as HTML…" and keep the report somewhere private (it lists Message-IDs and folder names, so do not share it).
+- Expected: "Everything is accounted for". All Mail on Bridge equals All Mail in the store. Every folder's Expected, Apple Mail and iCloud bars are the same length, and Missing is 0. "Extra" messages that were already in iCloud before the upload are fine.
+- Report back: the result line and the four numbers at the top, and any folder with a warning triangle (rename it if you like). Not the report itself. If it passes and you are happy, write "signed off" in the Result line below.
+- Result:
+
+### MT-006: Approve and watch the first real upload to iCloud
+- Status: blocked (needs David's go-ahead in the project thread first)
+- Added: 2026-11-02 by "Build the Proton to iCloud exporter"
+- Phase / PR: Phase 5, (Phase 5 PR)
+- Why David: his account; first real write to iCloud needs his approval
+- Before you start: MT-003 and MT-005 passed. Tell the agent in the project thread "go ahead with the iCloud upload".
+- Steps:
+  1. In the app's Upload step, click "Check (writes nothing)" again and confirm the numbers look right.
+  2. Click "Upload to iCloud…" and confirm.
+  3. Watch it for a few minutes, then let it run. Pause and Resume once to check it carries on.
+  4. When it finishes, open Mail on iCloud.com or your iPhone.
+- Expected: the summary shows "Uploaded" equal to the planned number and 0 refused (or a few, with copies kept in "Not uploaded"). In iCloud the folders match Proton, dates are the original ones, read and unread state and flags match, and Unfiled holds the All Mail-only messages.
+- Report back: the summary numbers, any refused count, and yes/no for folders, dates, read state, flags and attachments on a sample.
+- Result:
+
+### MT-005: Create an iCloud app-specific password and do a dry run
+- Status: pending
+- Added: 2026-11-02 by "Build the Proton to iCloud exporter"
+- Phase / PR: Phase 5, (Phase 5 PR)
+- Why David: sign-in, his account
+- Before you start: MT-003 passed.
+- Steps:
+  1. Go to account.apple.com > Sign-In and Security > App-Specific Passwords, create one called "Slop Export", and copy it.
+  2. In the app's Upload step, enter your Apple ID email and paste the app-specific password. It is saved in your Keychain.
+  3. Click "Check (writes nothing)".
+- Expected: it shows how many messages and how much space the upload needs, your iCloud storage use, and the folders it would create. Nothing changes in iCloud.
+- Report back: the numbers shown, and whether it warned about storage.
+- Result:
+
 ### MT-004: Import the Apple Mail mailboxes (Path A, optional)
 - Status: pending
 - Added: 2026-11-02 by "Build the Proton to iCloud exporter"

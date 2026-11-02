@@ -43,6 +43,30 @@ jobs:
         run: |
           PORT=$(python3 -c "import json;print(json.load(open('/tmp/slopfx/bridge.json'))['port'])")
           swift run slop-export probe --user fixture@example.test --port "$PORT" --cert /tmp/slopfx/bridge/cert.pem
+          swift run slop-export export --user fixture@example.test --port "$PORT" --cert /tmp/slopfx/bridge/cert.pem --out /tmp/slop-cli-export
+          swift run slop-export mbox --export /tmp/slop-cli-export --out /tmp/slop-cli-mbox
+      - name: CLI upload smoke test against the iCloud fixture
+        env:
+          SLOP_ICLOUD_PASSWORD: fixture-icloud-password
+        run: |
+          PORT=$(python3 -c "import json;print(json.load(open('/tmp/slopfx/icloud.json'))['port'])")
+          ARGS="--export /tmp/slop-cli-export --user fixture-9@icloud.example.test --host 127.0.0.1 --port $PORT --pin-cert /tmp/slopfx/icloud/cert.pem"
+          swift run slop-export upload $ARGS
+          swift run slop-export upload $ARGS --write
+          swift run slop-export upload $ARGS | tee /tmp/second.txt
+          grep -q "Total: 0 messages" /tmp/second.txt
+      - name: CLI verify smoke test (Bridge, export, mbox and iCloud fixtures)
+        env:
+          SLOP_BRIDGE_PASSWORD: fixture-bridge-password
+          SLOP_ICLOUD_PASSWORD: fixture-icloud-password
+        run: |
+          BPORT=$(python3 -c "import json;print(json.load(open('/tmp/slopfx/bridge.json'))['port'])")
+          IPORT=$(python3 -c "import json;print(json.load(open('/tmp/slopfx/icloud.json'))['port'])")
+          swift run slop-export verify --export /tmp/slop-cli-export --mbox /tmp/slop-cli-mbox \
+            --bridge-user fixture@example.test --bridge-port "$BPORT" --bridge-cert /tmp/slopfx/bridge/cert.pem \
+            --icloud-user fixture-9@icloud.example.test --icloud-host 127.0.0.1 --icloud-port "$IPORT" \
+            --icloud-pin-cert /tmp/slopfx/icloud/cert.pem --html /tmp/verify.html
+          grep -q "Passed" /tmp/verify.html
       - name: Fixture server logs
         if: failure()
         run: tail -n 100 /tmp/slopfx/*/dovecot.log || true

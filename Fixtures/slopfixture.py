@@ -12,6 +12,8 @@ Usage:
 
 After `up`, DIR/<kind>.json describes each server:
   {"host", "port", "security": "starttls"|"tls", "user", "password", "cert"}
+The icloud kind also accepts user-1@... through user-9@... with the same password,
+each with its own empty mailbox.
 
 No real mail, no real credentials: every message here is made up.
 """
@@ -238,12 +240,12 @@ def ensure_unix_user() -> tuple[str, int, int]:
 BRIDGE_CAPABILITIES = "IMAP4rev1 ID IDLE MOVE UIDPLUS UNSELECT LITERAL+"
 
 
-def write_config(d: Path, port: int, implicit_tls: bool, user: str, password: str) -> Path:
+def write_config(d: Path, port: int, implicit_tls: bool, users: list[str], password: str) -> Path:
     uname, uid, gid = ensure_unix_user()
     root = os.geteuid() == 0
     login_user = "dovenull" if root else uname
     internal_user = "dovecot" if root else uname
-    (d / "passwd").write_text(f"{user}:{{PLAIN}}{password}\n")
+    (d / "passwd").write_text("".join(f"{u}:{{PLAIN}}{password}\n" for u in users))
     listeners = (
         f"  inet_listener imap {{\n    port = 0\n  }}\n  inet_listener imaps {{\n    port = {port}\n    ssl = yes\n  }}\n"
         if implicit_tls else
@@ -278,7 +280,7 @@ passdb {{
 }}
 userdb {{
   driver = static
-  args = uid={uid} gid={gid} home={d}/home
+  args = uid={uid} gid={gid} home={d}/home/%u
 }}
 mail_location = maildir:~/Maildir:LAYOUT=fs
 namespace inbox {{
@@ -325,12 +327,15 @@ def up_one(base: Path, kind: str, attachment_bytes: int) -> dict[str, object]:
     implicit = kind == "icloud"
     user, password = (ICLOUD_USER, ICLOUD_PASSWORD) if implicit else (BRIDGE_USER, BRIDGE_PASSWORD)
     port = free_port()
-    conf = write_config(d, port, implicit, user, password)
-    maildir = d / "home" / "Maildir"
-    if implicit:
-        seed(maildir, ICLOUD_MAILBOXES, [])
-    else:
-        seed(maildir, BRIDGE_MAILBOXES, corpus(attachment_bytes))
+    # iCloud gets extra accounts (user-1 ... user-9) so tests can each start from an empty one.
+    users = [user] + ([user.replace("@", f"-{n}@") for n in range(1, 10)] if implicit else [])
+    conf = write_config(d, port, implicit, users, password)
+    for u in users:
+        maildir = d / "home" / u / "Maildir"
+        if implicit:
+            seed(maildir, ICLOUD_MAILBOXES, [])
+        else:
+            seed(maildir, BRIDGE_MAILBOXES, corpus(attachment_bytes))
     _, uid, gid = ensure_unix_user()
     for p in [d / "home", *(d / "home").rglob("*")]:
         os.chown(p, uid, gid)

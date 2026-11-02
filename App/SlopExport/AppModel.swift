@@ -57,6 +57,8 @@ final class AppModel {
         user = defaults.string(forKey: "bridge.user") ?? ""
         certificateDER = (defaults.data(forKey: "bridge.certificate")).map { Array($0) }
         certificateName = defaults.string(forKey: "bridge.certificateName")
+        icloudUser = defaults.string(forKey: "icloud.user") ?? ""
+        refreshICloudPassword()
         certificateFingerprint = Self.fingerprint(certificateDER)
         refreshSavedPassword()
         restoreExportFolder()
@@ -201,6 +203,10 @@ final class AppModel {
         folder.appendingPathComponent("Proton Export", isDirectory: true)
     }
 
+    nonisolated static func mboxDirectory(in folder: URL) -> URL {
+        folder.appendingPathComponent("Apple Mail Import", isDirectory: true)
+    }
+
     func refreshExistingExport() {
         guard let folder = exportFolder else { hasExistingExport = false; return }
         let scoped = folder.startAccessingSecurityScopedResource()
@@ -220,11 +226,165 @@ final class AppModel {
                 mboxResult = try await Task.detached(priority: .userInitiated) {
                     let scoped = folder.startAccessingSecurityScopedResource()
                     defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
-                    let exportDir = AppModel.exportDirectory(in: folder)
-                    let state = try ExportState.load(from: exportDir)
-                    return try MboxWriter(store: MessageStore(root: exportDir.appendingPathComponent("store")))
-                        .write(state: state, to: folder.appendingPathComponent("Apple Mail Import", isDirectory: true))
+                    return try MboxWriter.build(exportDirectory: AppModel.exportDirectory(in: folder),
+                                                to: AppModel.mboxDirectory(in: folder))
                 }.value
+            } catch {
+                errorMessage = String(describing: error)
+            }
+        }
+    }
+
+    // MARK: Upload step
+
+    var icloudUser: String {
+        didSet {
+            defaults.set(icloudUser, forKey: "icloud.user")
+            refreshICloudPassword()
+            uploadPlan = nil  // a plan is only good for the account it was made for
+        }
+    }
+    private(set) var hasSavedICloudPassword = false
+    var uploadPlan: UploadPlan?
+    var uploadProgress: UploadProgress?
+    var uploadSummary: UploadSummary?
+    private(set) var isPlanning = false
+    private(set) var isUploading = false
+    private var uploadTask: Task<Void, Never>?
+
+    private func refreshICloudPassword() {
+        hasSavedICloudPassword = !icloudUser.isEmpty && (try? KeychainSecrets().password(.icloud, account: icloudUser)) != nil
+    }
+
+    @discardableResult
+    func saveICloudPassword(_ password: String) -> Bool {
+        guard !password.isEmpty, !icloudUser.isEmpty else { return true }
+        do {
+            try KeychainSecrets().setPassword(password, .icloud, account: icloudUser)
+            refreshICloudPassword()
+            return true
+        } catch {
+            errorMessage = "Could not save the password to the Keychain: \(error)"
+            return false
+        }
+    }
+
+    var canPlanUpload: Bool { exportFolder != nil && hasExistingExport && !icloudUser.isEmpty && !isPlanning && !isUploading }
+
+    /// Replaying the journal can take a while on a big export, so it happens off the main actor.
+    private func makeUploader(folder: URL) async throws -> Uploader {
+        let user = icloudUser
+        guard let password = try KeychainSecrets().password(.icloud, account: user) else {
+            throw SecretError.missing(.icloud, account: user)
+        }
+        let endpoint = ICloudSettings(user: user).endpoint
+        let exportDir = Self.exportDirectory(in: folder)
+        return try await Task.detached(priority: .userInitiated) {
+            try Uploader(exportDirectory: exportDir, connect: {
+                try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: password)
+            }, progress: { progress in
+                Task { @MainActor in self.uploadProgress = progress }
+            })
+        }.value
+    }
+
+    /// Dry run: reads iCloud and reports what the upload would do. Writes nothing.
+    func planUpload() {
+        guard let folder = exportFolder else { return }
+        isPlanning = true
+        errorMessage = nil
+        Task {
+            let scoped = folder.startAccessingSecurityScopedResource()
+            defer {
+                if scoped { folder.stopAccessingSecurityScopedResource() }
+                isPlanning = false
+            }
+            do {
+                let uploader = try await makeUploader(folder: folder)
+                uploadPlan = try await uploader.plan()
+            } catch {
+                errorMessage = String(describing: error)
+            }
+        }
+    }
+
+    /// The real upload. The view asks for confirmation first.
+    func startUpload() {
+        guard let folder = exportFolder else { return }
+        isUploading = true
+        errorMessage = nil
+        uploadSummary = nil
+        uploadTask = Task {
+            let scoped = folder.startAccessingSecurityScopedResource()
+            defer {
+                if scoped { folder.stopAccessingSecurityScopedResource() }
+                isUploading = false
+                uploadTask = nil
+            }
+            do {
+                let uploader = try await makeUploader(folder: folder)
+                uploadSummary = try await uploader.run()
+                uploadPlan = nil  // spent; Check again before another upload
+            } catch is CancellationError {
+                uploadProgress = nil
+            } catch {
+                errorMessage = String(describing: error)
+            }
+        }
+    }
+
+    func pauseUpload() {
+        uploadTask?.cancel()
+    }
+
+    // MARK: Verify step
+
+    var verifyBridge = true
+    var verifyICloud = true
+    var verifyReport: VerifyReport?
+    private(set) var isVerifying = false
+
+    var canVerify: Bool { exportFolder != nil && hasExistingExport && !isVerifying && !isUploading }
+    var canVerifyBridge: Bool { certificateDER != nil && !user.isEmpty && hasSavedPassword }
+    var canVerifyICloud: Bool { !icloudUser.isEmpty && hasSavedICloudPassword }
+
+    /// Only reads: Bridge and iCloud are opened read-only (STATUS, EXAMINE, BODY.PEEK).
+    func runVerify() {
+        guard let folder = exportFolder else { return }
+        isVerifying = true
+        errorMessage = nil
+        var bridge: (@Sendable () async throws -> IMAPClient)?
+        var icloud: (@Sendable () async throws -> IMAPClient)?
+        do {
+            if verifyBridge, canVerifyBridge, let der = certificateDER,
+               let password = try KeychainSecrets().password(.bridge, account: user) {
+                let endpoint = ServerEndpoint(host: host, port: port, tls: .startTLS, trust: .pinned(try PinnedCertificate(bytes: der)))
+                let user = user
+                bridge = { try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: password) }
+            }
+            if verifyICloud, canVerifyICloud, let password = try KeychainSecrets().password(.icloud, account: icloudUser) {
+                let endpoint = ICloudSettings(user: icloudUser).endpoint
+                let user = icloudUser
+                icloud = { try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: password) }
+            }
+        } catch {
+            errorMessage = String(describing: error)
+            isVerifying = false
+            return
+        }
+        Task { [bridge, icloud] in
+            let scoped = folder.startAccessingSecurityScopedResource()
+            defer {
+                if scoped { folder.stopAccessingSecurityScopedResource() }
+                isVerifying = false
+            }
+            do {
+                // Inside the security scope: outside it the sandbox hides the folder.
+                let mbox = Self.mboxDirectory(in: folder)
+                let inputs = Verifier.Inputs(exportDirectory: Self.exportDirectory(in: folder),
+                                             mboxDirectory: FileManager.default.fileExists(atPath: mbox.path) ? mbox : nil,
+                                             bridge: bridge, icloud: icloud)
+                verifyReport = try await Task.detached(priority: .userInitiated) { try await Verifier.run(inputs) }.value
             } catch {
                 errorMessage = String(describing: error)
             }

@@ -15,8 +15,30 @@ public struct MboxWriter: Sendable {
 
     public struct Result: Sendable {
         public var mailboxes: [String: Int] = [:]
+        /// Target folder -> its `mbox` files, relative to the output folder (more than one if split).
+        public var files: [String: [String]] = [:]
         public var messages = 0
         public var bytes = 0
+    }
+
+    /// Written to the export folder (not the output, which Apple Mail imports) so `verify` knows
+    /// exactly which bundle holds which folder, even after collision renames and splits.
+    public struct Index: Codable, Sendable {
+        public static let fileName = "mbox-index.json"
+        public var output: String
+        public var files: [String: [String]]
+    }
+
+    /// Loads the export's state, writes the bundles and saves the index next to the journal.
+    @discardableResult
+    public static func build(exportDirectory: URL, to outputDirectory: URL, options: Options = Options()) throws -> Result {
+        let writer = MboxWriter(store: MessageStore(root: exportDirectory.appendingPathComponent("store")), options: options)
+        let result = try writer.write(state: try ExportState.load(from: exportDirectory), to: outputDirectory)
+        let index = Index(output: outputDirectory.standardizedFileURL.path, files: result.files)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(index).write(to: exportDirectory.appendingPathComponent(Index.fileName), options: .atomic)
+        return result
     }
 
     public let store: MessageStore
@@ -34,28 +56,22 @@ public struct MboxWriter: Sendable {
         if fm.fileExists(atPath: outputDirectory.path) { try fm.removeItem(at: outputDirectory) }
         try fm.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
 
-        var byTarget: [[String]: [MessageEntry]] = [:]
-        for entry in state.messages.values {
-            for target in state.targets(for: entry) { byTarget[target, default: []].append(entry) }
-        }
-
         var result = Result()
         var allocator = BundleAllocator(root: outputDirectory)
-        for target in byTarget.keys.sorted(by: { $0.joined(separator: "/") < $1.joined(separator: "/") }) {
-            // Sort keys computed once per message, not once per comparison.
-            let entries = byTarget[target]!
-                .map { (date: state.internalDate(for: $0)?.date ?? .distantPast, entry: $0) }
-                .sorted { ($0.date, $0.entry.hash) < ($1.date, $1.entry.hash) }
+        for (target, entries) in state.messagesByTarget() where !entries.isEmpty {
+            let key = target.joined(separator: "/")
             var part = 1
-            var handle = try openMbox(allocator.bundle(for: target, part: part))
+            var handle = try openMbox(allocator.bundle(for: target, part: part), recordingIn: &result.files[key, default: []],
+                                      root: outputDirectory)
             var written = 0
-            for (date, entry) in entries {
-                let data = Self.encode(raw: try store.read(entry.hash), flags: state.flags(for: entry, in: target),
-                                       date: date == .distantPast ? Date(timeIntervalSince1970: 0) : date)
+            for entry in entries {
+                let date = state.internalDate(for: entry)?.date ?? Date(timeIntervalSince1970: 0)
+                let data = Self.encode(raw: try store.read(entry.hash), flags: state.flags(for: entry, in: target), date: date)
                 if written > 0, written + data.count > options.maxMboxBytes {
                     try handle.close()
                     part += 1
-                    handle = try openMbox(allocator.bundle(for: target, part: part))
+                    handle = try openMbox(allocator.bundle(for: target, part: part), recordingIn: &result.files[key, default: []],
+                                          root: outputDirectory)
                     written = 0
                 }
                 try handle.write(contentsOf: data)
@@ -64,7 +80,7 @@ public struct MboxWriter: Sendable {
                 result.messages += 1
             }
             try handle.close()
-            result.mailboxes[target.joined(separator: "/")] = entries.count
+            result.mailboxes[key] = entries.count
         }
         return result
     }
@@ -125,9 +141,10 @@ public struct MboxWriter: Sendable {
         return cleaned
     }
 
-    private func openMbox(_ dir: URL) throws -> FileHandle {
+    private func openMbox(_ dir: URL, recordingIn files: inout [String], root: URL) throws -> FileHandle {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appendingPathComponent("mbox")
+        files.append(String(file.standardizedFileURL.path.dropFirst(root.standardizedFileURL.path.count + 1)))
         guard FileManager.default.createFile(atPath: file.path, contents: nil) else {
             throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: file.path])
         }
