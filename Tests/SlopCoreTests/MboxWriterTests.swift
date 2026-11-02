@@ -21,6 +21,14 @@ final class MboxWriterTests: XCTestCase {
             """)
     }
 
+    func testDroppedStatusHeaderTakesItsFoldedLinesWithIt() {
+        let raw = Data("Subject: a\r\nStatus: RO\r\n folded\r\n\tmore\r\nX-Other: b\r\n\r\nbody\r\n".utf8)
+        let out = String(decoding: MboxWriter.encode(raw: raw, flags: [], date: Date(timeIntervalSince1970: 0)), as: UTF8.self)
+        XCTAssertFalse(out.contains("folded"))
+        XCTAssertFalse(out.contains("more"))
+        XCTAssertTrue(out.contains("Subject: a\nX-Other: b\n\nbody\n"))
+    }
+
     func testAsctimePadsSingleDigitDay() {
         XCTAssertEqual(MboxWriter.asctime(Date(timeIntervalSince1970: 1_551_693_600)), "Mon Mar  4 10:00:00 2019")
     }

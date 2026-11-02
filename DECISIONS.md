@@ -21,6 +21,28 @@ David can overrule any entry by saying so in the project. The agent then adds a 
 
 ## Entries
 
+### D-014: Phase 7 review outcomes and what was left as is
+- Date: 2026-11-02
+- Status: accepted
+- Phase: 7
+- Context: Phase 7 ran security-review over the whole codebase, code-review (high) over Sources and App, simplify, and an accessibility pass. Some suggestions were not taken and need a record.
+- Options: fix everything; fix what has a concrete effect and log the rest.
+- Decision: fixed in Phase 7:
+  - Each step keeps its own last error. It is shown in one bar under that step, with an icon labelled for VoiceOver, and announced when it appears. So a failed export still says why when you come back, and never shows up on another step.
+  - Every step has a keyboard shortcut (Command-1 to Command-5) in a Go menu with a checkmark on the current step.
+  - Spinners are labelled or hidden from VoiceOver.
+  - Everything the CLI prints goes through `TerminalText.safe`, which strips control characters from server-supplied text. Saved reports keep the exact text.
+  - A dropped Status/X-Status header also drops its folded lines.
+
+  Left as is:
+  - Keychain items set `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, which the file-based login keychain ignores. Moving to the data-protection keychain needs a keychain-access-groups entitlement that an ad-hoc signed app may not get. Revisit with Developer ID signing.
+  - GitHub Actions are pinned by tag, not commit SHA. This agent session could not read the action repositories to resolve SHAs.
+  - All Mail matching by Message-ID + size (D-009) could in theory let a crafted message stand in for an All Mail-only one in Unfiled. That needs the exact Message-ID and size of a message the attacker never received.
+  - Switching steps from the menu while a file picker or confirmation is open closes it. This is standard SwiftUI behaviour and harmless.
+- Why: each fix has a test or a visible effect. The items left as is are either blocked on signing or theoretical.
+- Reversible: yes.
+- PR: (Phase 7 PR)
+
 ### D-013: When upload stops instead of skipping a message
 - Date: 2026-11-02
 - Status: accepted

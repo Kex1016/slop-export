@@ -1,6 +1,11 @@
 import Foundation
 
 enum Headers {
+    /// RFC 5322 folding: a header line starting with space or tab continues the previous field.
+    static func isContinuation<C: Collection>(_ line: C) -> Bool where C.Element == UInt8 {
+        line.first == UInt8(ascii: " ") || line.first == UInt8(ascii: "\t")
+    }
+
     /// The Message-ID from a header block (unfolded, case-insensitive), angle brackets kept.
     /// Works on bytes: in Swift strings "\r\n" is one character, so splitting text on "\n" fails.
     static func messageID(in header: [UInt8]) -> String? {
@@ -11,7 +16,7 @@ enum Headers {
                 if unfolded.isEmpty { continue }
                 break  // end of headers
             }
-            if line[0] == UInt8(ascii: " ") || line[0] == UInt8(ascii: "\t"), !unfolded.isEmpty {
+            if isContinuation(line), !unfolded.isEmpty {
                 unfolded[unfolded.count - 1] += [UInt8(ascii: " ")] + line
             } else {
                 unfolded.append(line)

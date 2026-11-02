@@ -38,15 +38,15 @@ struct ProbeCommand: AsyncParsableCommand {
     func run() async throws {
         let password = try DefaultSecrets().require(.bridge, account: bridge.user)
         let report = try await Probe.run(settings: bridge.settings, password: password) { line in
-            FileHandle.standardError.write(Data((line + "\n").utf8))
+            err(line)
         }
         if json {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            print(String(decoding: try encoder.encode(report), as: UTF8.self))
+            say(String(decoding: try encoder.encode(report), as: UTF8.self))
             return
         }
-        print(ProbeFormatter.table(report))
+        say(ProbeFormatter.table(report))
     }
 }
 
@@ -70,10 +70,10 @@ struct ExportCommand: AsyncParsableCommand {
             case .writingManifest: line = "Writing manifest"
             case .done: line = "Done"
             }
-            FileHandle.standardError.write(Data((line + "\n").utf8))
+            err(line)
         }
         let summary = try await exporter.run()
-        print("""
+        say("""
             Distinct messages: \(summary.distinctMessages)
             Downloaded this run: \(summary.downloadedThisRun)
             Matched without download: \(summary.matchedWithoutDownload)
@@ -94,9 +94,9 @@ struct MboxCommand: AsyncParsableCommand {
     func run() async throws {
         let result = try MboxWriter.build(exportDirectory: URL(fileURLWithPath: export), to: URL(fileURLWithPath: out))
         for (mailbox, count) in result.mailboxes.sorted(by: { $0.key < $1.key }) {
-            print("\(mailbox): \(count)")
+            say("\(mailbox): \(count)")
         }
-        print("\(result.messages) messages, \(ProbeFormatter.byteString(result.bytes)) in \(result.mailboxes.count) mailboxes")
+        say("\(result.messages) messages, \(ProbeFormatter.byteString(result.bytes)) in \(result.mailboxes.count) mailboxes")
     }
 }
 
@@ -153,9 +153,9 @@ struct VerifyCommand: AsyncParsableCommand {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
-            print(String(decoding: try encoder.encode(report), as: UTF8.self))
+            say(String(decoding: try encoder.encode(report), as: UTF8.self))
         } else {
-            print(plain, terminator: "")
+            say(plain, terminator: "")
         }
         if !report.passed { throw ExitCode(1) }
     }
@@ -187,28 +187,37 @@ struct UploadCommand: AsyncParsableCommand {
             try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: password)
         }, progress: { p in
             if let message = p.message {
-                FileHandle.standardError.write(Data((message + "\n").utf8))
+                err(message)
             } else if let folder = p.folder, p.total > 0, p.done == p.total || p.done % 100 == 0 {
-                FileHandle.standardError.write(Data("\(folder): \(p.done)/\(p.total)\n".utf8))
+                err("\(folder): \(p.done)/\(p.total)")
             }
         })
         let plan = try await uploader.plan()
         for folder in plan.folders {
-            print("\(folder.path)\(folder.exists ? "" : " (new)"): \(folder.toUpload) to upload, \(folder.alreadyThere) already there")
+            say("\(folder.path)\(folder.exists ? "" : " (new)"): \(folder.toUpload) to upload, \(folder.alreadyThere) already there")
         }
-        print("Total: \(plan.messagesToUpload) messages, \(ProbeFormatter.byteString(plan.bytesToUpload))")
+        say("Total: \(plan.messagesToUpload) messages, \(ProbeFormatter.byteString(plan.bytesToUpload))")
         if let used = plan.quotaUsed, let limit = plan.quotaLimit {
-            print("iCloud storage: \(ProbeFormatter.byteString(used)) of \(ProbeFormatter.byteString(limit)) used")
+            say("iCloud storage: \(ProbeFormatter.byteString(used)) of \(ProbeFormatter.byteString(limit)) used")
         }
         if let missing = plan.shortfall {
             throw UploadError.notEnoughSpace(needed: plan.bytesToUpload, missing: missing)
         }
         guard write else {
-            print("Dry run: nothing was written. Re-run with --write to upload.")
+            say("Dry run: nothing was written. Re-run with --write to upload.")
             return
         }
         let summary = try await uploader.run()
-        print("Uploaded \(summary.uploaded), already there \(summary.alreadyThere), failed \(summary.failed)"
+        say("Uploaded \(summary.uploaded), already there \(summary.alreadyThere), failed \(summary.failed)"
             + (summary.failed > 0 ? " (copies in \"Not uploaded\" in the export folder)" : ""))
     }
+}
+
+/// Everything the CLI prints goes through these, so server-supplied text cannot drive the terminal.
+func say(_ text: String, terminator: String = "\n") {
+    print(TerminalText.safe(text), terminator: terminator)
+}
+
+func err(_ text: String) {
+    FileHandle.standardError.write(Data((TerminalText.safe(text) + "\n").utf8))
 }
