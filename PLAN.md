@@ -2,7 +2,7 @@
 
 ## Goal
 
-Export every message David has in Proton Mail, with all of its folders, labels and flags, and get it into iCloud Mail so that iCloud holds the same mail in the same structure. The tool reads from Proton Mail Bridge on David's Mac and writes to a layout Apple Mail can import, or uploads straight to iCloud.
+Export every message David has in Proton Mail, with all of its folders and flags, and get it into iCloud Mail so that iCloud holds the same mail in the same structure. The tool reads from Proton Mail Bridge on David's Mac and writes to a layout Apple Mail can import, or uploads straight to iCloud.
 
 "Done" means all of the acceptance criteria at the bottom of this file are met and David has signed off the last entry in `MANUAL-TESTS.md`.
 
@@ -44,11 +44,11 @@ Bridge serves a local IMAP server (default `127.0.0.1:1143`, STARTTLS, self-sign
 | `Starred` | Virtual, starred messages | `\Flagged` flag, not a folder |
 | `All Mail` | Virtual, every message once | Used for completeness checks |
 | `Folders/<name>` | Custom folders (nested with `/`) | Matching nested folder |
-| `Labels/<name>` | Labels; a message can carry many | See label strategy below |
+| `Labels/<name>` | Labels; a message can carry many | Not exported (see D-001) |
 
-Labels have no equivalent in iCloud. The default strategy is: the message lives in its real folder, and a copy goes in a `Labels/<name>` folder for each label it carries. This keeps every view David has today at the cost of duplicates. Alternatives (no copies plus an `X-Keywords` header, or one folder per label only) are recorded in `DECISIONS.md` if chosen.
+Labels are dropped (D-001). The tool never reads the `Labels/` mailboxes and creates no label folders in iCloud. Each message goes only to the real folder it lives in.
 
-Messages that are only in `All Mail` and in no folder (possible with some label-only messages) must still be exported, to an `Unfiled` folder, so nothing is lost.
+Messages that are only in `All Mail` and in no folder (possible with some label-only messages) must still be exported, to an `Unfiled` folder, so dropping labels never drops mail.
 
 ## Phases
 
@@ -68,12 +68,12 @@ Each phase ends with a merged PR, its tests green, and its manual checks logged.
 - Manual test: David runs `probe` against his real Bridge and pastes the mailbox list with counts (names may be redacted).
 
 ### Phase 2: Test harness without Proton
-- A local IMAP server in Docker (Dovecot or GreenMail) seeded with synthetic mail that mirrors Bridge's layout: nested folders, labels, a message with several labels, starred, unread, drafts, huge attachments, non-UTF-8 headers, missing `Message-ID`, duplicates, an `All Mail`-only message.
+- A local IMAP server in Docker (Dovecot or GreenMail) seeded with synthetic mail that mirrors Bridge's layout: nested folders, a `Labels/` mailbox the tool must skip, starred, unread, drafts, huge attachments, non-UTF-8 headers, missing `Message-ID`, duplicates, an `All Mail`-only message.
 - A second fixture server stands in for iCloud for Path B.
 - All later phases are developed and tested against these, so agents never need David's account to make progress.
 
 ### Phase 3: Export engine
-- Walk every mailbox, fetch `RFC822`, `FLAGS`, `INTERNALDATE` with `BODY.PEEK` so nothing is marked read.
+- Walk every mailbox except `Labels/*` (and the virtual `Starred`), fetch `RFC822`, `FLAGS`, `INTERNALDATE` with `BODY.PEEK` so nothing is marked read.
 - Write a content-addressed raw store (`store/<sha256>.eml`) plus `manifest.json` that maps each message to its mailboxes, flags, date, size, `Message-ID` and hash.
 - Resumable and idempotent: a crash or Bridge restart resumes from the manifest, keyed on `UIDVALIDITY` + UID.
 - Throttle and retry, since Bridge syncs slowly on large accounts and can drop connections.
@@ -102,7 +102,7 @@ Each phase ends with a merged PR, its tests green, and its manual checks logged.
 
 ## Acceptance criteria
 
-1. Every mailbox Bridge lists, including every custom folder and label, is accounted for in the manifest.
+1. Every mailbox Bridge lists, including every custom folder, is accounted for in the manifest. `Labels/*` mailboxes are listed as skipped.
 2. Every message in Bridge's `All Mail` is in the store exactly once (by hash), and `verify` shows zero missing.
 3. Read, starred, answered and draft state survive into iCloud.
 4. Original dates show correctly in iCloud (not the import date).
@@ -116,5 +116,4 @@ Each phase ends with a merged PR, its tests green, and its manual checks logged.
 - Bridge requires a paid Proton plan and can take hours to sync a large account before counts are stable.
 - iCloud has a storage quota (5 GB on free tier) and a per-message size limit; oversized messages need a fallback (stored as `.eml` in a folder David keeps locally).
 - Apple Mail import of very large mbox files can hang. Path B avoids it.
-- Labels to folders creates duplicates and uses more iCloud space.
 - Proton or Apple may change Bridge or iCloud IMAP behaviour; record the versions tested in `DECISIONS.md`.
