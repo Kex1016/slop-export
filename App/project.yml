@@ -1,0 +1,62 @@
+# XcodeGen spec for SlopExport.app (D-005). Generate with: cd App && xcodegen generate
+name: SlopExport
+options:
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+packages:
+  SlopCore:
+    path: ..
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: ""
+    ENABLE_HARDENED_RUNTIME: YES
+targets:
+  SlopExport:
+    type: application
+    platform: macOS
+    sources: [SlopExport]
+    dependencies:
+      - package: SlopCore
+        product: SlopCore
+    entitlements:
+      path: SlopExport/SlopExport.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.files.user-selected.read-write: true
+        com.apple.security.files.bookmarks.app-scope: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.kex1016.slopexport
+        PRODUCT_NAME: SlopExport
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: "Slop Export"
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        ONLY_ACTIVE_ARCH: NO
+        ARCHS: "$(ARCHS_STANDARD)"
+  SlopExportUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources: [SlopExportUITests]
+    dependencies:
+      - target: SlopExport
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.kex1016.slopexport.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: SlopExport
+schemes:
+  SlopExport:
+    build:
+      targets:
+        SlopExport: all
+    test:
+      targets:
+        - SlopExportUITests

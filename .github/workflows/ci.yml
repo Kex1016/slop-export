@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux (core, CLI, fixture integration)
+    runs-on: ubuntu-24.04
+    container: swift:6.1-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Dovecot for the fixture servers
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq dovecot-imapd python3 openssl >/dev/null
+      - uses: actions/cache@v4
+        with:
+          path: .build
+          key: linux-build-${{ hashFiles('Package.resolved', 'Package.swift') }}
+      - name: Build
+        run: swift build --build-tests
+      - name: Start fixture servers
+        run: python3 Fixtures/slopfixture.py up --dir /tmp/slopfx
+      - name: Test
+        env:
+          SLOP_FIXTURE_DIR: /tmp/slopfx
+          SLOP_REQUIRE_FIXTURES: "1"
+        run: swift test
+      - name: CLI smoke test against the fixture
+        env:
+          SLOP_BRIDGE_PASSWORD: fixture-bridge-password
+        run: |
+          PORT=$(python3 -c "import json;print(json.load(open('/tmp/slopfx/bridge.json'))['port'])")
+          swift run slop-export probe --user fixture@example.test --port "$PORT" --cert /tmp/slopfx/bridge/cert.pem
+      - name: Fixture server logs
+        if: failure()
+        run: tail -n 100 /tmp/slopfx/*/dovecot.log || true
+
+  macos:
+    name: macOS (app, UI tests, package)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: brew install xcodegen swiftlint
+      - name: Lint
+        run: swiftlint lint --reporter github-actions-logging
+      - name: Core unit tests
+        run: swift test
+      - name: Generate Xcode project
+        run: cd App && xcodegen generate
+      - name: Build universal app
+        run: |
+          xcodebuild -project App/SlopExport.xcodeproj -scheme SlopExport -configuration Release \
+            -destination 'generic/platform=macOS' -derivedDataPath build \
+            ONLY_ACTIVE_ARCH=NO build | xcbeautify || exit ${PIPESTATUS[0]}
+      - name: UI tests
+        run: |
+          xcodebuild -project App/SlopExport.xcodeproj -scheme SlopExport -configuration Debug \
+            -destination 'platform=macOS' -derivedDataPath build-tests test | xcbeautify || exit ${PIPESTATUS[0]}
+      - name: Check the app is universal and sandboxed
+        run: |
+          APP=build/Build/Products/Release/SlopExport.app
+          lipo -archs "$APP/Contents/MacOS/SlopExport" | tee /dev/stderr | grep -q "x86_64 arm64"
+          codesign -d --entitlements - "$APP" 2>/dev/null | grep -q "com.apple.security.app-sandbox"
+      - name: Package
+        run: scripts/package-app.sh build/Build/Products/Release/SlopExport.app dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SlopExport-app
+          path: dist/*
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos]
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install xcodegen
+      - run: cd App && xcodegen generate
+      - name: Build
+        run: |
+          xcodebuild -project App/SlopExport.xcodeproj -scheme SlopExport -configuration Release \
+            -destination 'generic/platform=macOS' -derivedDataPath build ONLY_ACTIVE_ARCH=NO build
+      - name: Package (ad-hoc signed, D-002)
+        run: scripts/package-app.sh build/Build/Products/Release/SlopExport.app dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

@@ -43,4 +43,33 @@ These will become full entries when their phase starts:
 
 ## Entries
 
-_None yet._
+### MT-002: Open the test build and scan your mailboxes
+- Status: pending
+- Added: 2026-11-02 by "Build the Proton to iCloud exporter"
+- Phase / PR: Phase 1, (Phase 0-2 PR)
+- Why David: his device, his account
+- Before you start: MT-001 done, Bridge running and synced.
+- Steps:
+  1. Download `SlopExport-app` from the latest green CI run on `main` (Actions tab > CI > the run > Artifacts) and unzip it; it contains `SlopExport.zip` and `SlopExport.dmg`. (A proper GitHub Release comes in Phase 7.)
+  2. Open the `.dmg` and drag Slop Export to Applications.
+  3. Open it. macOS will say it cannot verify the developer. Open System Settings > Privacy & Security, scroll down, click "Open Anyway" next to Slop Export, and confirm.
+  4. In the Connect step, type the IMAP user name Bridge shows for your account, click Choose… and pick the certificate from MT-001, and paste the Bridge password (from Bridge, not your Proton password) into the password field.
+  5. Click "Connect and scan". If macOS asks whether Slop Export may use the Keychain, click Always Allow.
+- Expected: the Scan step lists every Bridge mailbox with counts and sizes. `Labels/...` rows say "skipped (labels, D-001)". No mail is downloaded and nothing changes in Proton.
+- Report back: the table with folder names blurred or renamed if you prefer, the "Messages to export" and "All Mail" numbers, and the server name and version shown at the top. If it fails, the red error text.
+- Result:
+
+### MT-001: Set up Bridge and export its certificate
+- Status: pending
+- Added: 2026-11-02 by "Build the Proton to iCloud exporter"
+- Phase / PR: Phase 1, (Phase 0-2 PR)
+- Why David: sign-in
+- Before you start: a paid Proton plan (Bridge needs one).
+- Steps:
+  1. Install Proton Mail Bridge from proton.me/mail/bridge and sign in with your Proton account.
+  2. Leave it running until it says your account is synced (large mailboxes can take hours).
+  3. In Bridge, open Settings > Advanced settings > Export TLS certificates, and save `cert.pem` somewhere you can find it (Documents is fine).
+  4. In Bridge, click your account and note the IMAP host, port, user name and connection security. Leave the password in Bridge for now; MT-002 tells you where it goes.
+- Expected: host `127.0.0.1`, port `1143`, security STARTTLS (other values are fine, just report them).
+- Report back: host, port and security mode. Not the password.
+- Result:
