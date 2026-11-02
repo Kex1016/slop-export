@@ -27,14 +27,20 @@ Hitting one of these limits is not a reason to stop. Log the manual step and con
 | Skill | When to use it |
 |---|---|
 | `init` | Once Phase 0 has code: generate `CLAUDE.md` so every new thread knows the layout, commands and these rules. Re-run when the structure changes a lot. |
-| `run` | Every phase: actually run the CLI against the fixture IMAP servers to see the change work, not just the unit tests. |
+| `run` | Every phase: run the `slop-export` CLI against the fixture IMAP servers to see the change work, not just the unit tests. The cloud container is Linux and cannot open the macOS app, so app changes are seen through the `macos` CI job (UI tests and screenshots attached as artifacts), or on David's Mac through a Remote Control session when he has connected it. |
 | `code-review` | Before marking any PR ready, at medium effort; at high effort for the export engine (Phase 3), upload (Phase 5) and the final pass (Phase 7). |
 | `simplify` | After `code-review` on each larger PR, to remove duplication and dead code before merge. |
-| `security-review` | Phase 1 (credentials, TLS pinning), Phase 5 (iCloud upload) and Phase 7 (full pass). Any finding is fixed before the PR merges. |
-| `dataviz` | Phase 6: the per-folder charts in `report.html` that show Proton vs export vs iCloud counts. |
+| `security-review` | Phase 0 (sandbox entitlements), Phase 1 (Keychain, TLS pinning), Phase 5 (iCloud upload) and Phase 7 (full pass). Any finding is fixed before the PR merges. |
+| `dataviz` | Phase 6: the design of the Swift Charts verify screen and the saved HTML report that compare Proton, export and iCloud counts per folder. |
 | `claude-api` | Not needed for the core tool, which should not send mail content to any outside service. Use only if David asks for an LLM feature, and then only on metadata he approves. |
 
-Also available on the account and worth using: `engineering:testing-strategy` (Phase 2 fixture design), `engineering:architecture` (decision records for big choices), `engineering:debug` (when a real-account test fails), `engineering:documentation` (Phase 7 README), and `loop` or scheduled check-ins to resume long-running work without David nudging it.
+Also available on the account and worth using: `design:ux-copy` and `design:accessibility-review` (the app's wording, errors and VoiceOver pass in Phase 7), `engineering:testing-strategy` (Phase 2 fixture design), `engineering:architecture` (decision records for big choices), `engineering:debug` (when a real-account test fails), `engineering:documentation` (Phase 7 README), and `loop` or scheduled check-ins to resume long-running work without David nudging it.
+
+## Building a Mac app from a Linux container
+
+- `SlopCore` and the CLI must build and test on Linux (`swift build`, `swift test`). Keep Apple-only APIs (Keychain, SwiftUI, Security-scoped bookmarks) behind small protocols in the app target so the core stays portable.
+- Anything that needs macOS (the app, Keychain, signing, UI tests) is proven on the `macos` CI job. A red `macos` job is as blocking as a red Linux job.
+- Never claim the app works because the core tests pass. Say which job showed it.
 
 ## Working loop for each task
 
