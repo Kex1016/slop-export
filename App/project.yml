@@ -39,7 +39,6 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: "Slop Export"
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
-        ONLY_ACTIVE_ARCH: NO
         ARCHS: "$(ARCHS_STANDARD)"
   SlopExportUITests:
     type: bundle.ui-testing

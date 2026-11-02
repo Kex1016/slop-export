@@ -197,7 +197,7 @@ final class AppModel {
     private(set) var hasExistingExport = false
     private(set) var isBuildingMailboxes = false
 
-    static func exportDirectory(in folder: URL) -> URL {
+    nonisolated static func exportDirectory(in folder: URL) -> URL {
         folder.appendingPathComponent("Proton Export", isDirectory: true)
     }
 
