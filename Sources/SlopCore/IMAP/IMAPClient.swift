@@ -243,9 +243,10 @@ public actor IMAPClient {
                               describe: describe ?? String(describing: command).prefix(40).description)
     }
 
-    private func send(tag: String, parts: [CommandStreamPart], describe: String) async throws -> CommandResult {
+    private func send(tag: String, parts: [CommandStreamPart], describe: String,
+                      timeout: TimeAmount? = nil) async throws -> CommandResult {
         let promise = channel.eventLoop.makePromise(of: CommandResult.self)
-        channel.writeAndFlush(CollectorRequest.command(tag: tag, parts: parts, timeout: commandTimeout, promise: promise),
+        channel.writeAndFlush(CollectorRequest.command(tag: tag, parts: parts, timeout: timeout ?? commandTimeout, promise: promise),
                               promise: nil)
         let result = try await promise.futureResult.get()
         switch result.state {
@@ -364,7 +365,25 @@ public actor IMAPClient {
             .append(.endMessage),
             .append(.finish),
         ]
-        _ = try await send(tag: tag, parts: parts, describe: "APPEND \(path.joined(separator: "/"))")
+        // The server is silent while the literal streams, and the idle timer only restarts on
+        // reads, so allow for a slow uplink (32 KB/s) on top of the usual timeout.
+        let upload = TimeAmount.seconds(Int64(message.readableBytes / 32_000))
+        _ = try await send(tag: tag, parts: parts, describe: "APPEND \(path.joined(separator: "/"))",
+                           timeout: commandTimeout + upload)
+    }
+
+    /// STORAGE usage and limit in bytes for the quota root of `mailbox` (RFC 2087), or nil if the
+    /// server has no QUOTA support.
+    public func storageQuota(for mailbox: [String] = ["INBOX"], separator: Character = "/") async throws -> (used: Int, limit: Int)? {
+        guard hasCapability("QUOTA") else { return nil }
+        let name = try Self.mailboxPath(mailbox, separator: separator).name
+        let result = try await run(.getQuotaRoot(name), describe: "GETQUOTAROOT")
+        for case .quota(_, let resources) in result.untagged {
+            if let storage = resources.first(where: { $0.resourceName.uppercased() == "STORAGE" }) {
+                return (used: storage.usage * 1024, limit: storage.limit * 1024)
+            }
+        }
+        return nil
     }
 
     public func logout() async {

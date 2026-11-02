@@ -19,8 +19,8 @@ struct ContentView: View {
             case .connect: ConnectView()
             case .scan: ScanView()
             case .export: ExportView()
-            case .verify: PendingStepView(step: .verify, phase: 6)
-            case .upload: PendingStepView(step: .upload, phase: 5)
+            case .verify: VerifyView()
+            case .upload: UploadView()
             }
         }
     }
@@ -240,13 +240,97 @@ struct ExportProgressView: View {
     }
 }
 
-struct PendingStepView: View {
-    let step: Step
-    let phase: Int
+struct UploadView: View {
+    @Environment(AppModel.self) private var model
+    @State private var password = ""
+    @State private var confirming = false
 
     var body: some View {
-        ContentUnavailableView(step.title, systemImage: step.symbol,
-                               description: Text("Coming in a later build (PLAN.md phase \(phase))."))
-            .navigationTitle(step.title)
+        @Bindable var model = model
+        Form {
+            Section {
+                TextField("Apple ID", text: $model.icloudUser, prompt: Text("you@icloud.com"))
+                SecureField("App-specific password", text: $password,
+                            prompt: Text(model.hasSavedICloudPassword ? "Saved in Keychain" : "xxxx-xxxx-xxxx-xxxx"))
+                    .onSubmit { savePassword() }
+            } header: {
+                Text("iCloud Mail")
+            } footer: {
+                Text("Create an app-specific password at account.apple.com › Sign-In and Security › App-Specific Passwords. It is saved in your Keychain. Your Apple ID password is never needed.")
+            }
+
+            Section("Check first") {
+                if let plan = model.uploadPlan {
+                    LabeledContent("Messages to upload", value: plan.messagesToUpload.formatted())
+                    LabeledContent("Size", value: ProbeFormatter.byteString(plan.bytesToUpload))
+                    if let used = plan.quotaUsed, let limit = plan.quotaLimit {
+                        LabeledContent("iCloud storage", value: "\(ProbeFormatter.byteString(used)) of \(ProbeFormatter.byteString(limit)) used")
+                    }
+                    if !plan.foldersToCreate.isEmpty {
+                        LabeledContent("New folders", value: plan.foldersToCreate.joined(separator: ", "))
+                    }
+                    if let missing = plan.shortfall {
+                        Text("Not enough iCloud storage: \(ProbeFormatter.byteString(missing)) short.").foregroundStyle(.red)
+                    }
+                }
+                HStack {
+                    if model.isPlanning { ProgressView().controlSize(.small) }
+                    Spacer()
+                    Button("Check (writes nothing)") {
+                        guard savePassword() else { return }
+                        model.planUpload()
+                    }
+                    .disabled(!model.canPlanUpload)
+                }
+            }
+
+            Section("Upload") {
+                if let progress = model.uploadProgress, let folder = progress.folder, progress.total > 0 {
+                    ProgressView(value: Double(progress.done), total: Double(progress.total)) {
+                        Text(folder)
+                    } currentValueLabel: {
+                        Text("\(progress.done.formatted()) of \(progress.total.formatted())")
+                    }
+                } else if let message = model.uploadProgress?.message {
+                    Text(message).foregroundStyle(.secondary)
+                }
+                if let summary = model.uploadSummary {
+                    LabeledContent("Uploaded", value: summary.uploaded.formatted())
+                    LabeledContent("Already in iCloud", value: summary.alreadyThere.formatted())
+                    if summary.failed > 0 {
+                        LabeledContent("Refused by iCloud (kept in \"Not uploaded\")", value: summary.failed.formatted())
+                    }
+                }
+                HStack {
+                    Spacer()
+                    if model.isUploading {
+                        Button("Pause") { model.pauseUpload() }
+                    } else {
+                        Button("Upload to iCloud…") { confirming = true }
+                            .disabled(model.uploadPlan == nil || model.uploadPlan?.shortfall != nil || !model.canPlanUpload)
+                    }
+                }
+            }
+
+            if let error = model.errorMessage {
+                Text(error).foregroundStyle(.red)
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Upload")
+        .confirmationDialog("Upload \(model.uploadPlan?.messagesToUpload ?? 0) messages to iCloud?",
+                            isPresented: $confirming) {
+            Button("Upload") { model.startUpload() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This adds mail to \(model.icloudUser). Nothing is deleted, and messages already there are skipped. You can pause and resume.")
+        }
+    }
+
+    @discardableResult
+    private func savePassword() -> Bool {
+        guard model.saveICloudPassword(password) else { return false }
+        password = ""
+        return true
     }
 }

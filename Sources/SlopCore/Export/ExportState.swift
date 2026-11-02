@@ -155,6 +155,26 @@ public struct ExportState: Sendable {
         entry.locations.lazy.compactMap(\.internalDate).first
     }
 
+    /// Every target folder with its messages, oldest first, folders sorted by path. Every export
+    /// mailbox is listed, even an empty one, so outputs keep the same folder structure. Shared by
+    /// the mbox writer, the uploader and verify so they can never disagree on what goes where.
+    public func messagesByTarget() -> [(target: [String], entries: [MessageEntry])] {
+        var byTarget: [[String]: [MessageEntry]] = [:]
+        for box in mailboxes.values {
+            if case .export(let target) = box.role, byTarget[target] == nil { byTarget[target] = [] }
+        }
+        for entry in messages.values {
+            for target in targets(for: entry) { byTarget[target, default: []].append(entry) }
+        }
+        return byTarget.keys.sorted { $0.joined(separator: "/") < $1.joined(separator: "/") }.map { target in
+            let entries = byTarget[target]!
+                .map { (date: internalDate(for: $0)?.date ?? .distantPast, entry: $0) }
+                .sorted { ($0.date, $0.entry.hash) < ($1.date, $1.entry.hash) }
+                .map(\.entry)
+            return (target, entries)
+        }
+    }
+
     /// Messages that will go to `Unfiled`.
     public var unfiled: [MessageEntry] {
         messages.values.filter { targets(for: $0) == [MailboxPlan.unfiled] }

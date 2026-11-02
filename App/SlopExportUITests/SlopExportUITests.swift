@@ -10,4 +10,16 @@ final class SlopExportUITests: XCTestCase {
         XCTAssertFalse(app.buttons["connect-button"].isEnabled)
         XCTAssertTrue(app.secureTextFields["bridge-password"].exists)
     }
+
+    @MainActor
+    func testVerifyStepNeedsAnExportFirst() throws {
+        let app = XCUIApplication()
+        app.launchArguments += ["-export.bookmark", ""]
+        app.launch()
+        let step = app.descendants(matching: .any)["step-verify"]
+        XCTAssertTrue(step.waitForExistence(timeout: 10))
+        step.click()
+        XCTAssertTrue(app.buttons["verify-button"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["verify-button"].isEnabled)
+    }
 }

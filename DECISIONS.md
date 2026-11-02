@@ -21,6 +21,39 @@ David can overrule any entry by saying so in the project. The agent then adds a 
 
 ## Entries
 
+### D-013: When upload stops instead of skipping a message
+- Date: 2026-11-02
+- Status: accepted
+- Phase: 5
+- Context: code review found that any NO to an APPEND was treated as "iCloud refuses this message", so throttling or a full mailbox would have copied every remaining message to `Not uploaded/`.
+- Options: treat every NO as per-message; treat every NO as fatal; per-message only while other messages still get through.
+- Decision: a refused APPEND is held back. It becomes a real refusal (copied to `Not uploaded/`, journalled) only once a later message is accepted. Three refusals in a row, or any refusal mentioning quota, stops the upload with a clear message and marks nothing as failed, so the next run retries them. APPENDs are spaced 50 ms apart, and their timeout grows with message size (32 KB/s floor) because the server is silent while a large message streams. After a dropped connection, a message counts as landed only if its folder holds more copies than the run has already accounted for.
+- Why: a genuinely oversized message is still skipped and kept, while a server-wide refusal cannot quietly drop the rest of the export.
+- Reversible: yes, `Uploader.Options`.
+- PR: (Phase 5-6 PR)
+
+### D-012: How verify counts and compares
+- Date: 2026-11-02
+- Status: accepted
+- Phase: 6
+- Context: verify must compare Bridge, the export, the Apple Mail folders and iCloud per folder and list every missing or extra message, without downloading mail again.
+- Options: count only; compare by hash (needs every iCloud body); compare by the same Message-ID + size + INTERNALDATE key the uploader uses.
+- Decision: Bridge side compares live STATUS counts (or the last scan's counts when Bridge is not connected) with what the journal recorded, per mailbox, and checks that every All Mail entry is in the store. Apple Mail side counts the `From ` separators in each bundle. `mbox` now writes `mbox-index.json` into the export folder (not the import folder Apple Mail reads) so verify knows exactly which bundles hold which folder after collision renames and size splits; without the index it falls back to matching bundle names. iCloud side reads headers only and matches each expected message with the uploader's presence key as a multiset; anything left over on either side is reported as missing or extra. Mail iCloud refused (kept in `Not uploaded/`) shows as missing, on purpose. The app shows the same report with a Swift Charts bar chart and a table, and saves HTML (everything escaped) or plain text.
+- Why: no body downloads, so verify of a large account takes minutes; the key is the one upload already relies on, so verify and upload cannot disagree. Tested in `VerifyIntegrationTests` (passing case, missing uploads, emptied mbox).
+- Reversible: yes, verify is read-only and self-contained.
+- PR: (Phase 5-6 PR)
+
+### D-011: How upload avoids duplicates and handles refusals
+- Date: 2026-11-02
+- Status: accepted
+- Phase: 5
+- Context: PLAN.md asks for "skip messages already present (by Message-ID + hash)", but iCloud cannot tell us a stored message's hash without downloading it.
+- Options: trust a local upload journal only; download every iCloud message and hash it; journal plus a cheap check of what each folder holds.
+- Decision: every successful APPEND is journalled in `upload.jsonl` (target folder + hash). Before uploading into a folder, the uploader also reads that folder's Message-ID, size and INTERNALDATE (headers only) and treats a matching message as already there, as a multiset so N identical messages need N copies. After a dropped connection mid-APPEND it checks again before resending. A message iCloud refuses (for example, over its size limit) is copied to `Not uploaded/<folder>/` in the export folder, journalled, and skipped. Empty folders are created too, so the structure matches. Upload is a dry run unless `--write` is given (CLI) or confirmed in a dialog (app), and it checks the iCloud quota before writing anything.
+- Why: covers the crash window between APPEND and journal write without downloading the mailbox back. Tested by deleting `upload.jsonl` after a full upload: the re-run adds nothing.
+- Reversible: yes.
+- PR: (Phase 5 PR)
+
 ### D-010: Apple Mail output format
 - Date: 2026-11-02
 - Status: accepted
