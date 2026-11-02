@@ -59,6 +59,7 @@ final class AppModel {
         certificateName = defaults.string(forKey: "bridge.certificateName")
         certificateFingerprint = Self.fingerprint(certificateDER)
         refreshSavedPassword()
+        restoreExportFolder()
     }
 
     private func save() {
@@ -109,6 +110,124 @@ final class AppModel {
         } catch {
             errorMessage = "Could not save the password to the Keychain: \(error)"
             return false
+        }
+    }
+
+    // MARK: Export step
+
+    /// Folder the export lives in, kept as a security-scoped bookmark so the sandboxed app can
+    /// reopen it after a relaunch and resume.
+    private(set) var exportFolder: URL?
+    var exportProgress: ExportProgress?
+    var exportSummary: ExportSummary?
+    var mboxResult: MboxWriter.Result?
+    private(set) var isExporting = false
+    private var exportTask: Task<Void, Never>?
+
+    func restoreExportFolder() {
+        guard let data = defaults.data(forKey: "export.bookmark") else { return }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil,
+                                 bookmarkDataIsStale: &stale) else { return }
+        exportFolder = url
+        if stale { chooseExportFolder(url) } else { refreshExistingExport() }
+    }
+
+    func chooseExportFolder(_ url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let data = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
+            defaults.set(data, forKey: "export.bookmark")
+            exportFolder = url
+            errorMessage = nil
+            refreshExistingExport()
+        } catch {
+            errorMessage = "Could not remember that folder: \(error.localizedDescription)"
+        }
+    }
+
+    var canExport: Bool { exportFolder != nil && certificateDER != nil && !user.isEmpty && !isExporting }
+
+    /// Starts or resumes the export. Stopping and starting again is always safe: the journal
+    /// in the export folder records what is already done.
+    func startExport() {
+        guard let folder = exportFolder, let der = certificateDER else { return }
+        let user = self.user
+        let host = self.host
+        let port = self.port
+        errorMessage = nil
+        exportSummary = nil
+        isExporting = true
+        exportTask = Task {
+            let scoped = folder.startAccessingSecurityScopedResource()
+            defer {
+                if scoped { folder.stopAccessingSecurityScopedResource() }
+                isExporting = false
+                exportTask = nil
+            }
+            do {
+                guard let password = try KeychainSecrets().password(.bridge, account: user) else {
+                    throw SecretError.missing(.bridge, account: user)
+                }
+                let endpoint = ServerEndpoint(host: host, port: port, tls: .startTLS,
+                                              trust: .pinned(try PinnedCertificate(bytes: der)))
+                let exporter = try Exporter(directory: Self.exportDirectory(in: folder), connect: {
+                    try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: password)
+                }, progress: { progress in
+                    Task { @MainActor in self.exportProgress = progress }
+                })
+                exportSummary = try await exporter.run()
+                hasExistingExport = true
+            } catch is CancellationError {
+                exportProgress = nil
+                refreshExistingExport()
+            } catch {
+                errorMessage = String(describing: error)
+            }
+        }
+    }
+
+    func pauseExport() {
+        exportTask?.cancel()
+    }
+
+    /// Whether the chosen folder already holds an export (so the button says Resume and the
+    /// Apple Mail step is available, even after a relaunch).
+    private(set) var hasExistingExport = false
+    private(set) var isBuildingMailboxes = false
+
+    static func exportDirectory(in folder: URL) -> URL {
+        folder.appendingPathComponent("Proton Export", isDirectory: true)
+    }
+
+    func refreshExistingExport() {
+        guard let folder = exportFolder else { hasExistingExport = false; return }
+        let scoped = folder.startAccessingSecurityScopedResource()
+        defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
+        hasExistingExport = FileManager.default.fileExists(
+            atPath: Self.exportDirectory(in: folder).appendingPathComponent("journal.jsonl").path)
+    }
+
+    /// Path A: writes Apple Mail mailboxes next to the export, off the main thread.
+    func buildMailboxes() {
+        guard let folder = exportFolder, !isBuildingMailboxes else { return }
+        isBuildingMailboxes = true
+        errorMessage = nil
+        Task {
+            defer { isBuildingMailboxes = false }
+            do {
+                mboxResult = try await Task.detached(priority: .userInitiated) {
+                    let scoped = folder.startAccessingSecurityScopedResource()
+                    defer { if scoped { folder.stopAccessingSecurityScopedResource() } }
+                    let exportDir = AppModel.exportDirectory(in: folder)
+                    let state = try ExportState.load(from: exportDir)
+                    return try MboxWriter(store: MessageStore(root: exportDir.appendingPathComponent("store")))
+                        .write(state: state, to: folder.appendingPathComponent("Apple Mail Import", isDirectory: true))
+                }.value
+            } catch {
+                errorMessage = String(describing: error)
+            }
         }
     }
 

@@ -43,6 +43,35 @@ These will become full entries when their phase starts:
 
 ## Entries
 
+### MT-004: Import the Apple Mail mailboxes (Path A, optional)
+- Status: pending
+- Added: 2026-11-02 by "Build the Proton to iCloud exporter"
+- Phase / PR: Phase 4, (Phase 3-4 PR)
+- Why David: his device, human judgement
+- Before you start: MT-003 passed.
+- Steps:
+  1. In the app's Export step, click "Build Apple Mail mailboxes".
+  2. In Mail, choose File > Import Mailboxes…, pick "Apple Mail", and select the "Apple Mail Import" folder inside your export folder.
+  3. Mail puts them under "Import" in the sidebar, On My Mac. Open a few folders.
+  4. Don't drag anything into iCloud yet; the Upload step does that more reliably.
+- Expected: the same folders as in Proton, with the right counts. Read and unread match Proton, starred messages are flagged, dates are the original ones, attachments open, and non-English subjects look right.
+- Report back: yes/no for each of those, and how long the import took. If anything looks wrong, which folder and roughly what (no message content).
+- Result:
+
+### MT-003: Run a full export from your Bridge
+- Status: pending
+- Added: 2026-11-02 by "Build the Proton to iCloud exporter"
+- Phase / PR: Phase 3, (Phase 3-4 PR)
+- Why David: his account, his device
+- Before you start: MT-002 passed, Bridge running and synced, enough free disk space for your mailbox (Scan shows the size).
+- Steps:
+  1. In the app, open Export and choose a folder (a new folder in Documents is fine).
+  2. Click "Start export". Leave it running. Large mailboxes can take hours, since Bridge is slow.
+  3. Partway through, click Pause, quit the app, reopen it, go to Export and click "Resume export".
+- Expected: it carries on from where it stopped, then shows "Export complete" with the number of messages and how many are "Only in All Mail". Nothing in Proton is marked read.
+- Report back: the two numbers, whether the resume worked, roughly how long it took, and the size of the "Proton Export" folder.
+- Result:
+
 ### MT-002: Open the test build and scan your mailboxes
 - Status: pending
 - Added: 2026-11-02 by "Build the Proton to iCloud exporter"

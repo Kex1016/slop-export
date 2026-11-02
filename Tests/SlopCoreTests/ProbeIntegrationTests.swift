@@ -8,7 +8,7 @@ final class ProbeIntegrationTests: XCTestCase {
         let report = try await Probe.run(settings: fx.bridgeSettings, password: fx.password)
         let byPath = Dictionary(uniqueKeysWithValues: report.mailboxes.map { ($0.path, $0) })
 
-        XCTAssertEqual(byPath["All Mail"]?.messages, 12)
+        XCTAssertEqual(byPath["All Mail"]?.messages, 13)
         XCTAssertEqual(byPath["INBOX"]?.messages, 2)
         XCTAssertEqual(byPath["Folders/Ünïcödé Ordner"]?.messages, 2, "non-ASCII folder names decode")
         XCTAssertEqual(byPath["Folders/Work/Projects"]?.role, .export(target: ["Work", "Projects"]))

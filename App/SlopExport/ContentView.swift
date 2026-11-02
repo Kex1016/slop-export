@@ -18,7 +18,7 @@ struct ContentView: View {
             switch model.step ?? .connect {
             case .connect: ConnectView()
             case .scan: ScanView()
-            case .export: PendingStepView(step: .export, phase: 3)
+            case .export: ExportView()
             case .verify: PendingStepView(step: .verify, phase: 6)
             case .upload: PendingStepView(step: .upload, phase: 5)
             }
@@ -138,6 +138,105 @@ struct ScanView: View {
             }
         }
         .navigationTitle("Scan")
+    }
+}
+
+struct ExportView: View {
+    @Environment(AppModel.self) private var model
+    @State private var choosingFolder = false
+
+    var body: some View {
+        Form {
+            Section {
+                HStack {
+                    Text(model.exportFolder?.path ?? "No folder chosen")
+                        .foregroundStyle(model.exportFolder == nil ? .secondary : .primary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    Button("Choose…") { choosingFolder = true }.disabled(model.isExporting)
+                }
+            } header: {
+                Text("Export folder")
+            } footer: {
+                Text("Needs room for all of your mail. The app keeps its progress here, so you can quit and carry on later.")
+            }
+
+            Section("Download from Bridge") {
+                if let progress = model.exportProgress {
+                    ExportProgressView(progress: progress)
+                }
+                if let summary = model.exportSummary {
+                    LabeledContent("Messages exported", value: summary.distinctMessages.formatted())
+                    LabeledContent("Only in All Mail (go to Unfiled)", value: summary.unfiled.formatted())
+                }
+                HStack {
+                    Spacer()
+                    if model.isExporting {
+                        Button("Pause") { model.pauseExport() }
+                            .accessibilityIdentifier("pause-export")
+                    } else {
+                        Button(model.hasExistingExport ? "Resume export" : "Start export") { model.startExport() }
+                            .keyboardShortcut(.defaultAction)
+                            .disabled(!model.canExport)
+                            .accessibilityIdentifier("start-export")
+                    }
+                }
+            }
+
+            Section {
+                if let result = model.mboxResult {
+                    LabeledContent("Mailboxes written", value: result.mailboxes.count.formatted())
+                    LabeledContent("Messages", value: result.messages.formatted())
+                }
+                HStack {
+                    Spacer()
+                    if model.isBuildingMailboxes { ProgressView().controlSize(.small) }
+                    Button("Build Apple Mail mailboxes") { model.buildMailboxes() }
+                        .disabled(model.isExporting || model.isBuildingMailboxes || !model.hasExistingExport)
+                }
+            } header: {
+                Text("Apple Mail (optional)")
+            } footer: {
+                Text("Writes .mbox mailboxes to \"Apple Mail Import\" in the export folder, for File › Import Mailboxes in Mail. Uploading straight to iCloud (the Upload step) does not need this.")
+            }
+
+            if let error = model.errorMessage {
+                Text(error).foregroundStyle(.red)
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle("Export")
+        .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
+            if case .success(let url) = result { model.chooseExportFolder(url) }
+        }
+    }
+}
+
+struct ExportProgressView: View {
+    let progress: ExportProgress
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            switch progress.phase {
+            case .downloading where progress.total > 0:
+                ProgressView(value: Double(progress.done), total: Double(progress.total)) {
+                    Text(progress.mailbox ?? "")
+                } currentValueLabel: {
+                    Text("\(progress.done.formatted()) of \(progress.total.formatted())")
+                }
+            case .done:
+                Label("Export complete", systemImage: "checkmark.circle")
+            default:
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text(progress.message ?? progress.mailbox.map { "Scanning \($0)" } ?? "Connecting…")
+                }
+            }
+            Text("\(ProbeFormatter.byteString(progress.downloadedBytes)) downloaded this session")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

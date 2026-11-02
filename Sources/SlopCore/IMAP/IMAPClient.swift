@@ -212,6 +212,18 @@ public actor IMAPClient {
         }
     }
 
+    /// Connects and logs in, closing the connection again if login fails.
+    public static func connectAndLogin(to endpoint: ServerEndpoint, user: String, password: String) async throws -> IMAPClient {
+        let client = try await connect(to: endpoint)
+        do {
+            try await client.login(user: user, password: password)
+            return client
+        } catch {
+            await client.close()
+            throw error
+        }
+    }
+
     public func close() async {
         _ = try? await channel.close()
         if ownsGroup { try? await group.shutdownGracefully() }
@@ -312,11 +324,14 @@ public actor IMAPClient {
         return selected
     }
 
-    /// UID, FLAGS, INTERNALDATE and RFC822.SIZE for every message in the selected mailbox.
-    public func fetchAllMetadata() async throws -> [FetchRecord] {
+    /// UID, FLAGS, INTERNALDATE and RFC822.SIZE for every message in the selected mailbox, and
+    /// optionally the Message-ID header (BODY.PEEK, so nothing is marked read), which lets
+    /// messages be matched across mailboxes without downloading them twice.
+    public func fetchAllMetadata(withMessageID: Bool = false) async throws -> [FetchRecord] {
         let all = MessageIdentifierSetNonEmpty<UID>(range: MessageIdentifierRange<UID>(UID(rawValue: 1)...))
-        let result = try await run(.uidFetch(.set(all), [.uid, .flags, .internalDate, .rfc822Size], []),
-                                   describe: "UID FETCH metadata")
+        var attributes: [FetchAttribute] = [.uid, .flags, .internalDate, .rfc822Size]
+        if withMessageID { attributes.append(.bodySection(peek: true, .headerFields(["MESSAGE-ID"]), nil)) }
+        let result = try await run(.uidFetch(.set(all), attributes, []), describe: "UID FETCH metadata")
         return result.fetches
     }
 

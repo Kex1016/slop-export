@@ -130,6 +130,12 @@ def corpus(attachment_bytes: int) -> list[Msg]:
                          "Hello\r\nFrom the start of a line\r\n>From already quoted\r\nBye\r\n"),
                  _date(2024, 6, 1), {"Folders/Ünïcödé Ordner": "S"}))
 
+    # Starred, but in no folder (a label-only message with a star): stored from Starred, and
+    # must not be downloaded a second time for All Mail.
+    m.append(Msg("m13-starred-unfiled",
+                 _simple("m13-starred-unfiled", "Starred receipt", _date(2024, 9, 9), "Starred, no folder.\r\n"),
+                 _date(2024, 9, 9), {"Starred": "FS", "Labels/Receipts": "FS"}))
+
     # All Mail: every distinct message once (m02's label copy is the same message).
     for msg in m:
         msg.places["All Mail"] = next(iter(msg.places.values()))
