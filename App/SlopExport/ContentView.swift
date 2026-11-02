@@ -15,12 +15,30 @@ struct ContentView: View {
             }
             .navigationSplitViewColumnWidth(min: 160, ideal: 180)
         } detail: {
-            switch model.step ?? .connect {
-            case .connect: ConnectView()
-            case .scan: ScanView()
-            case .export: ExportView()
-            case .verify: VerifyView()
-            case .upload: UploadView()
+            Group {
+                switch model.step ?? .connect {
+                case .connect: ConnectView()
+                case .scan: ScanView()
+                case .export: ExportView()
+                case .verify: VerifyView()
+                case .upload: UploadView()
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                // One place shows each step's error, under whatever that step is showing.
+                if let error = model.errors[model.step ?? .connect] {
+                    ErrorText(error)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(.bar)
+                        .accessibilityIdentifier("step-error")
+                }
+            }
+        }
+        .onChange(of: model.errors) { old, new in
+            // Errors appear away from the button that caused them, so read new ones out.
+            for (step, message) in new where old[step] != message {
+                AccessibilityNotification.Announcement("\(step.title) error: \(message)").post()
             }
         }
     }
@@ -57,6 +75,7 @@ struct ConnectView: View {
                         .foregroundStyle(model.certificateDER == nil ? .secondary : .primary)
                     Spacer()
                     Button("Choose…") { choosingCertificate = true }
+                        .accessibilityLabel("Choose Bridge certificate")
                 }
                 if let fingerprint = model.certificateFingerprint {
                     Text("SHA-256 \(fingerprint)")
@@ -70,13 +89,9 @@ struct ConnectView: View {
                 Text("In Bridge: Settings › Advanced settings › Export TLS certificates. Only a Bridge presenting this exact certificate is accepted.")
             }
 
-            if let error = model.errorMessage {
-                Text(error).foregroundStyle(.red).accessibilityIdentifier("connect-error")
-            }
-
             HStack {
                 if let status = model.status {
-                    ProgressView().controlSize(.small)
+                    ProgressView().controlSize(.small).accessibilityHidden(true)
                     Text(status).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -154,7 +169,9 @@ struct ExportView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
-                    Button("Choose…") { choosingFolder = true }.disabled(model.isExporting)
+                    Button("Choose…") { choosingFolder = true }
+                        .disabled(model.isExporting)
+                        .accessibilityLabel("Choose export folder")
                 }
             } header: {
                 Text("Export folder")
@@ -191,7 +208,9 @@ struct ExportView: View {
                 }
                 HStack {
                     Spacer()
-                    if model.isBuildingMailboxes { ProgressView().controlSize(.small) }
+                    if model.isBuildingMailboxes {
+                        ProgressView().controlSize(.small).accessibilityLabel("Building Apple Mail mailboxes")
+                    }
                     Button("Build Apple Mail mailboxes") { model.buildMailboxes() }
                         .disabled(model.isExporting || model.isBuildingMailboxes || !model.hasExistingExport)
                 }
@@ -199,10 +218,6 @@ struct ExportView: View {
                 Text("Apple Mail (optional)")
             } footer: {
                 Text("Writes .mbox mailboxes to \"Apple Mail Import\" in the export folder, for File › Import Mailboxes in Mail. Uploading straight to iCloud (the Upload step) does not need this.")
-            }
-
-            if let error = model.errorMessage {
-                Text(error).foregroundStyle(.red)
             }
         }
         .formStyle(.grouped)
@@ -229,7 +244,7 @@ struct ExportProgressView: View {
                 Label("Export complete", systemImage: "checkmark.circle")
             default:
                 HStack {
-                    ProgressView().controlSize(.small)
+                    ProgressView().controlSize(.small).accessibilityHidden(true)
                     Text(progress.message ?? progress.mailbox.map { "Scanning \($0)" } ?? "Connecting…")
                 }
             }
@@ -270,11 +285,11 @@ struct UploadView: View {
                         LabeledContent("New folders", value: plan.foldersToCreate.joined(separator: ", "))
                     }
                     if let missing = plan.shortfall {
-                        Text("Not enough iCloud storage: \(ProbeFormatter.byteString(missing)) short.").foregroundStyle(.red)
+                        ErrorText("Not enough iCloud storage: \(ProbeFormatter.byteString(missing)) short.")
                     }
                 }
                 HStack {
-                    if model.isPlanning { ProgressView().controlSize(.small) }
+                    if model.isPlanning { ProgressView().controlSize(.small).accessibilityLabel("Checking iCloud") }
                     Spacer()
                     Button("Check (writes nothing)") {
                         guard savePassword() else { return }
@@ -311,10 +326,6 @@ struct UploadView: View {
                     }
                 }
             }
-
-            if let error = model.errorMessage {
-                Text(error).foregroundStyle(.red)
-            }
         }
         .formStyle(.grouped)
         .navigationTitle("Upload")
@@ -332,5 +343,29 @@ struct UploadView: View {
         guard model.saveICloudPassword(password) else { return false }
         password = ""
         return true
+    }
+}
+
+/// Errors carry an icon and an "Error" label for VoiceOver, so red is never the only signal.
+struct ErrorText: View {
+    let message: String
+    init(_ message: String) { self.message = message }
+
+    var body: some View {
+        Label {
+            Text(message).textSelection(.enabled)
+        } icon: {
+            ErrorIcon()
+        }
+        .foregroundStyle(Palette.critical)
+    }
+}
+
+/// The warning icon used for errors and for counts that are off, labelled for VoiceOver.
+struct ErrorIcon: View {
+    var body: some View {
+        Image(systemName: "exclamationmark.triangle.fill")
+            .foregroundStyle(Palette.critical)
+            .accessibilityLabel("Problem")
     }
 }

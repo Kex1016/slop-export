@@ -12,6 +12,17 @@ final class SlopExportUITests: XCTestCase {
     }
 
     @MainActor
+    func testCommandNumberSwitchesSteps() throws {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 10))
+        app.typeKey("4", modifierFlags: .command)
+        XCTAssertTrue(app.buttons["verify-button"].waitForExistence(timeout: 5))
+        app.typeKey("1", modifierFlags: .command)
+        XCTAssertTrue(app.buttons["connect-button"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
     func testVerifyStepNeedsAnExportFirst() throws {
         let app = XCUIApplication()
         app.launchArguments += ["-export.bookmark", ""]

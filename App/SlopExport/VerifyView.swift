@@ -23,7 +23,7 @@ struct VerifyView: View {
                             .font(.callout)
                             .foregroundStyle(.secondary)
                         HStack {
-                            if model.isVerifying { ProgressView().controlSize(.small) }
+                            if model.isVerifying { ProgressView().controlSize(.small).accessibilityLabel("Verifying") }
                             Spacer()
                             Button("Verify") { model.runVerify() }
                                 .keyboardShortcut(.defaultAction)
@@ -32,10 +32,6 @@ struct VerifyView: View {
                         }
                     }
                     .padding(4)
-                }
-
-                if let error = model.errorMessage {
-                    Text(error).foregroundStyle(.red)
                 }
 
                 if let report = model.verifyReport {
@@ -57,7 +53,7 @@ struct VerifyView: View {
         .fileExporter(isPresented: Binding(get: { exporting != nil }, set: { if !$0 { exporting = nil } }),
                       document: exporting, contentType: exporting?.type ?? .html,
                       defaultFilename: "slop-export verify report") { result in
-            if case .failure(let error) = result { model.errorMessage = error.localizedDescription }
+            if case .failure(let error) = result { model.errors[.verify] = error.localizedDescription }
         }
     }
 }
@@ -292,7 +288,7 @@ struct FolderTable: View {
     private func cell(_ value: Int?, bad: Bool) -> some View {
         if let value {
             HStack(spacing: 4) {
-                if bad { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Palette.critical) }
+                if bad { ErrorIcon() }
                 Text(value.formatted())
             }
         } else {

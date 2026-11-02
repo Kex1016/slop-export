@@ -166,13 +166,19 @@ public struct MboxWriter: Sendable {
         if !xStatus.isEmpty { out.append(Data("X-Status: \(xStatus)\n".utf8)) }
 
         var inHeaders = true
+        var droppingHeader = false
         for var line in raw.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false) {
             if line.last == UInt8(ascii: "\r") { line = line.dropLast() }
             if inHeaders {
                 if line.isEmpty {
                     inHeaders = false
+                } else if droppingHeader, Headers.isContinuation(line) {
+                    continue  // folded continuation of a header being dropped
                 } else if isHeader(line, named: "Status") || isHeader(line, named: "X-Status") {
+                    droppingHeader = true
                     continue  // ours replace any the message already had
+                } else {
+                    droppingHeader = false
                 }
             }
             if isFromLine(line) { out.append(UInt8(ascii: ">")) }

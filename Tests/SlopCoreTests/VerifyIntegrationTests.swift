@@ -104,6 +104,10 @@ final class VerifyFormatterTests: XCTestCase {
         XCTAssertEqual(VerifyFormatter.problems(report).count, 2)
     }
 
+    func testTerminalTextDropsControlCharactersButKeepsLayout() {
+        XCTAssertEqual(TerminalText.safe("a\u{1B}]0;pwned\u{07}b\u{9B}c\td\ne"), "a]0;pwnedbc\td\ne")
+    }
+
     func testSkippedAndDeletedAllMailStillPass() {
         func report(bridge: Int, stored: Int, skipped: Int) -> VerifyReport {
             VerifyReport(generatedAt: Date(), sources: [], targets: [], skipped: [], distinctMessages: stored,

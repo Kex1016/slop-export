@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 import SlopCore
 
 /// The five steps of the export, in order (PLAN.md, "App flow").
@@ -15,6 +16,18 @@ enum Step: String, CaseIterable, Identifiable {
         case .verify: "Verify"
         case .upload: "Upload"
         }
+    }
+
+    /// Command-1 to Command-5 in the Go menu.
+    var shortcut: KeyboardShortcut {
+        let key: Character = switch self {
+        case .connect: "1"
+        case .scan: "2"
+        case .export: "3"
+        case .verify: "4"
+        case .upload: "5"
+        }
+        return KeyboardShortcut(KeyEquivalent(key), modifiers: .command)
     }
 
     var symbol: String {
@@ -45,7 +58,9 @@ final class AppModel {
 
     var isWorking = false
     var status: String?
-    var errorMessage: String?
+    /// The last error of each step. Long-running work writes to its own step, so a failed export
+    /// still says why when you come back to it, and never shows up on another step.
+    var errors: [Step: String] = [:]
     var report: ProbeReport?
 
     private let defaults: UserDefaults
@@ -87,7 +102,7 @@ final class AppModel {
     var canConnect: Bool { !host.isEmpty && !user.isEmpty && certificateDER != nil && !isWorking }
 
     func importCertificate(from url: URL) {
-        errorMessage = nil
+        errors[.connect] = nil
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         do {
@@ -95,7 +110,7 @@ final class AppModel {
             certificateDER = pin.der
             certificateName = url.lastPathComponent
         } catch {
-            errorMessage = "That file is not a certificate Bridge exported: \(error.localizedDescription)"
+            errors[.connect] = "That file is not a certificate Bridge exported: \(error.localizedDescription)"
         }
     }
 
@@ -110,7 +125,7 @@ final class AppModel {
             refreshSavedPassword()
             return true
         } catch {
-            errorMessage = "Could not save the password to the Keychain: \(error)"
+            errors[.connect] = "Could not save the password to the Keychain: \(error)"
             return false
         }
     }
@@ -142,10 +157,10 @@ final class AppModel {
             let data = try url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil)
             defaults.set(data, forKey: "export.bookmark")
             exportFolder = url
-            errorMessage = nil
+            errors[.export] = nil
             refreshExistingExport()
         } catch {
-            errorMessage = "Could not remember that folder: \(error.localizedDescription)"
+            errors[.export] = "Could not remember that folder: \(error.localizedDescription)"
         }
     }
 
@@ -158,7 +173,7 @@ final class AppModel {
         let user = self.user
         let host = self.host
         let port = self.port
-        errorMessage = nil
+        errors[.export] = nil
         exportSummary = nil
         isExporting = true
         exportTask = Task {
@@ -185,7 +200,7 @@ final class AppModel {
                 exportProgress = nil
                 refreshExistingExport()
             } catch {
-                errorMessage = String(describing: error)
+                errors[.export] = String(describing: error)
             }
         }
     }
@@ -219,7 +234,7 @@ final class AppModel {
     func buildMailboxes() {
         guard let folder = exportFolder, !isBuildingMailboxes else { return }
         isBuildingMailboxes = true
-        errorMessage = nil
+        errors[.export] = nil
         Task {
             defer { isBuildingMailboxes = false }
             do {
@@ -230,7 +245,7 @@ final class AppModel {
                                                 to: AppModel.mboxDirectory(in: folder))
                 }.value
             } catch {
-                errorMessage = String(describing: error)
+                errors[.export] = String(describing: error)
             }
         }
     }
@@ -264,7 +279,7 @@ final class AppModel {
             refreshICloudPassword()
             return true
         } catch {
-            errorMessage = "Could not save the password to the Keychain: \(error)"
+            errors[.upload] = "Could not save the password to the Keychain: \(error)"
             return false
         }
     }
@@ -292,7 +307,7 @@ final class AppModel {
     func planUpload() {
         guard let folder = exportFolder else { return }
         isPlanning = true
-        errorMessage = nil
+        errors[.upload] = nil
         Task {
             let scoped = folder.startAccessingSecurityScopedResource()
             defer {
@@ -303,7 +318,7 @@ final class AppModel {
                 let uploader = try await makeUploader(folder: folder)
                 uploadPlan = try await uploader.plan()
             } catch {
-                errorMessage = String(describing: error)
+                errors[.upload] = String(describing: error)
             }
         }
     }
@@ -312,7 +327,7 @@ final class AppModel {
     func startUpload() {
         guard let folder = exportFolder else { return }
         isUploading = true
-        errorMessage = nil
+        errors[.upload] = nil
         uploadSummary = nil
         uploadTask = Task {
             let scoped = folder.startAccessingSecurityScopedResource()
@@ -328,7 +343,7 @@ final class AppModel {
             } catch is CancellationError {
                 uploadProgress = nil
             } catch {
-                errorMessage = String(describing: error)
+                errors[.upload] = String(describing: error)
             }
         }
     }
@@ -352,7 +367,7 @@ final class AppModel {
     func runVerify() {
         guard let folder = exportFolder else { return }
         isVerifying = true
-        errorMessage = nil
+        errors[.verify] = nil
         var bridge: (@Sendable () async throws -> IMAPClient)?
         var icloud: (@Sendable () async throws -> IMAPClient)?
         do {
@@ -368,7 +383,7 @@ final class AppModel {
                 icloud = { try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: password) }
             }
         } catch {
-            errorMessage = String(describing: error)
+            errors[.verify] = String(describing: error)
             isVerifying = false
             return
         }
@@ -386,7 +401,7 @@ final class AppModel {
                                              bridge: bridge, icloud: icloud)
                 verifyReport = try await Task.detached(priority: .userInitiated) { try await Verifier.run(inputs) }.value
             } catch {
-                errorMessage = String(describing: error)
+                errors[.verify] = String(describing: error)
             }
         }
     }
@@ -394,7 +409,7 @@ final class AppModel {
     func connectAndScan() async {
         guard let der = certificateDER else { return }
         isWorking = true
-        errorMessage = nil
+        errors[.connect] = nil
         status = "Connecting to Bridge…"
         defer { isWorking = false }
         do {
@@ -412,7 +427,7 @@ final class AppModel {
             step = .scan
         } catch {
             status = nil
-            errorMessage = String(describing: error)
+            errors[.connect] = String(describing: error)
         }
     }
 }
