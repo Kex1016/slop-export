@@ -10,7 +10,8 @@ line_length:
   error: 200
   ignores_comments: true
 identifier_name:
-  excluded: [i, id, ok, to, at, fx, p, s, k, v, u, n]
+  # Short names are fine for closure parameters and loop variables in this codebase.
+  min_length: 1
 type_body_length:
   warning: 400
 file_length:
