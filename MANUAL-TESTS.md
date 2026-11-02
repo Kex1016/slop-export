@@ -43,6 +43,21 @@ These will become full entries when their phase starts:
 
 ## Entries
 
+### MT-008: Publish the first release (v0.1.0)
+- Status: pending
+- Added: 2026-11-02 by "Build the Proton to iCloud exporter"
+- Phase / PR: Phase 7
+- Why David: this agent session can push branches but not tags, so it cannot start a release itself
+- Before you start: nothing.
+- Steps:
+  1. On GitHub, open the repository's Releases page and click "Draft a new release".
+  2. Under "Choose a tag", type `v0.1.0` and pick "Create new tag on publish", with `main` as the target.
+  3. Title it "Slop Export 0.1.0" and click "Publish release".
+  4. Wait about 15 minutes. The CI run for the tag builds the app and attaches `SlopExport.dmg`, `SlopExport.zip` and `SHA256SUMS.txt` to the release.
+- Expected: the release has the three files. The README's install link then points to it.
+- Report back: "released", or the error from the CI run if the files do not appear.
+- Result:
+
 ### MT-007: Verify against your real account and sign off
 - Status: pending
 - Added: 2026-11-02 by "Build the Proton to iCloud exporter"
