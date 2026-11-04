@@ -95,8 +95,13 @@ final class AppModel {
         der.flatMap { try? PinnedCertificate(bytes: $0).fingerprint }
     }
 
+    /// The user name as typed, minus pasted whitespace or invisible characters. Used for the
+    /// Keychain account and for LOGIN, so a stray space cannot split one account into two.
+    var bridgeAccount: String { Credentials.clean(user) }
+    var icloudAccount: String { Credentials.clean(icloudUser) }
+
     private func refreshSavedPassword() {
-        hasSavedPassword = !user.isEmpty && (try? KeychainSecrets().password(.bridge, account: user)) != nil
+        hasSavedPassword = !user.isEmpty && (try? KeychainSecrets().password(.bridge, account: bridgeAccount)) != nil
     }
 
     var canConnect: Bool { !host.isEmpty && !user.isEmpty && certificateDER != nil && !isWorking }
@@ -121,7 +126,7 @@ final class AppModel {
     func savePassword(_ password: String) -> Bool {
         guard !password.isEmpty, !user.isEmpty else { return true }
         do {
-            try KeychainSecrets().setPassword(password, .bridge, account: user)
+            try KeychainSecrets().setPassword(Credentials.clean(password), .bridge, account: bridgeAccount)
             refreshSavedPassword()
             return true
         } catch {
@@ -170,7 +175,7 @@ final class AppModel {
     /// in the export folder records what is already done.
     func startExport() {
         guard let folder = exportFolder, let der = certificateDER else { return }
-        let user = self.user
+        let user = bridgeAccount
         let host = self.host
         let port = self.port
         errors[.export] = nil
@@ -268,14 +273,14 @@ final class AppModel {
     private var uploadTask: Task<Void, Never>?
 
     private func refreshICloudPassword() {
-        hasSavedICloudPassword = !icloudUser.isEmpty && (try? KeychainSecrets().password(.icloud, account: icloudUser)) != nil
+        hasSavedICloudPassword = !icloudUser.isEmpty && (try? KeychainSecrets().password(.icloud, account: icloudAccount)) != nil
     }
 
     @discardableResult
     func saveICloudPassword(_ password: String) -> Bool {
         guard !password.isEmpty, !icloudUser.isEmpty else { return true }
         do {
-            try KeychainSecrets().setPassword(password, .icloud, account: icloudUser)
+            try KeychainSecrets().setPassword(Credentials.clean(password), .icloud, account: icloudAccount)
             refreshICloudPassword()
             return true
         } catch {
@@ -288,7 +293,7 @@ final class AppModel {
 
     /// Replaying the journal can take a while on a big export, so it happens off the main actor.
     private func makeUploader(folder: URL) async throws -> Uploader {
-        let user = icloudUser
+        let user = icloudAccount
         guard let password = try KeychainSecrets().password(.icloud, account: user) else {
             throw SecretError.missing(.icloud, account: user)
         }
@@ -372,14 +377,14 @@ final class AppModel {
         var icloud: (@Sendable () async throws -> IMAPClient)?
         do {
             if verifyBridge, canVerifyBridge, let der = certificateDER,
-               let password = try KeychainSecrets().password(.bridge, account: user) {
+               let password = try KeychainSecrets().password(.bridge, account: bridgeAccount) {
                 let endpoint = ServerEndpoint(host: host, port: port, tls: .startTLS, trust: .pinned(try PinnedCertificate(bytes: der)))
-                let user = user
+                let user = bridgeAccount
                 bridge = { try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: password) }
             }
-            if verifyICloud, canVerifyICloud, let password = try KeychainSecrets().password(.icloud, account: icloudUser) {
-                let endpoint = ICloudSettings(user: icloudUser).endpoint
-                let user = icloudUser
+            if verifyICloud, canVerifyICloud, let password = try KeychainSecrets().password(.icloud, account: icloudAccount) {
+                let endpoint = ICloudSettings(user: icloudAccount).endpoint
+                let user = icloudAccount
                 icloud = { try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: password) }
             }
         } catch {
@@ -413,12 +418,12 @@ final class AppModel {
         status = "Connecting to Bridge…"
         defer { isWorking = false }
         do {
-            guard let password = try KeychainSecrets().password(.bridge, account: user) else {
-                throw SecretError.missing(.bridge, account: user)
+            guard let password = try KeychainSecrets().password(.bridge, account: bridgeAccount) else {
+                throw SecretError.missing(.bridge, account: bridgeAccount)
             }
             let endpoint = ServerEndpoint(host: host, port: port, tls: .startTLS,
                                           trust: .pinned(try PinnedCertificate(bytes: der)))
-            let report = try await Probe.run(endpoint: endpoint, user: user, password: password) { line in
+            let report = try await Probe.run(endpoint: endpoint, user: bridgeAccount, password: password) { line in
                 // Progress hops arrive out of band; drop any that land after the scan ended.
                 Task { @MainActor in if self.isWorking { self.status = line } }
             }

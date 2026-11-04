@@ -57,11 +57,28 @@ public enum IMAPError: Error, CustomStringConvertible, Sendable {
         case .commandFailed(let command, let status, let text): return "\(command) failed (\(status)): \(text)"
         case .loginRejected(let text):
             return "The server did not accept the user name and password (it said: \(text)). "
-                + "For Bridge, use the user name and password Bridge shows for this account (Mailbox details), "
-                + "not your Proton login. If Bridge shows a separate entry per address (split mode), use that address's details."
+                + "For Proton Mail Bridge, use the user name and password Bridge shows for this account (Mailbox details), "
+                + "not your Proton login; in split address mode each address has its own. "
+                + "For iCloud, use your Apple ID email and an app-specific password, not your Apple ID password."
         case .unexpected(let text): return "Unexpected IMAP behaviour: \(text)"
         }
     }
+}
+
+/// Cleaning for pasted user names and passwords.
+public enum Credentials {
+    /// Removes whitespace, line breaks and invisible format characters (zero-width space,
+    /// byte order mark, word joiner) from both ends. Copying from Bridge, a password manager or
+    /// a web page can bring these along; neither Bridge nor iCloud credentials contain them.
+    public static func clean(_ s: String) -> String {
+        s.trimmingCharacters(in: trimmed)
+    }
+
+    static let trimmed: CharacterSet = {
+        var set = CharacterSet.whitespacesAndNewlines
+        set.insert(charactersIn: "\u{200B}\u{200C}\u{200D}\u{2060}\u{FEFF}")
+        return set
+    }()
 }
 
 /// A mailbox as LIST returns it.
@@ -251,14 +268,51 @@ public actor IMAPClient {
 
     private func send(tag: String, parts: [CommandStreamPart], describe: String,
                       timeout: TimeAmount? = nil) async throws -> CommandResult {
+        let result = try await sendUnchecked(tag: tag, parts: parts, timeout: timeout)
+        switch result.state {
+        case .ok: return result
+        case .no(let text): throw IMAPError.commandFailed(command: describe, status: "NO", text: Self.render(text))
+        case .bad(let text): throw IMAPError.commandFailed(command: describe, status: "BAD", text: Self.render(text))
+        }
+    }
+
+    /// Sends a command and returns its result whatever the tagged status was.
+    private func sendUnchecked(tag: String, parts: [CommandStreamPart], timeout: TimeAmount? = nil) async throws -> CommandResult {
         let promise = channel.eventLoop.makePromise(of: CommandResult.self)
         channel.writeAndFlush(CollectorRequest.command(tag: tag, parts: parts, timeout: timeout ?? commandTimeout, promise: promise),
                               promise: nil)
-        let result = try await promise.futureResult.get()
-        switch result.state {
-        case .ok: return result
-        case .no(let text): throw IMAPError.commandFailed(command: describe, status: "NO", text: text.text)
-        case .bad(let text): throw IMAPError.commandFailed(command: describe, status: "BAD", text: text.text)
+        return try await promise.futureResult.get()
+    }
+
+    /// Response text with its code, as in "[UNAVAILABLE] try again later", so the code is not lost.
+    static func render(_ text: ResponseText) -> String {
+        guard let code = text.code else { return text.text }
+        return "[\(codeName(code))] \(text.text)"
+    }
+
+    static func codeName(_ code: ResponseTextCode) -> String {
+        switch code {
+        case .authenticationFailed: return "AUTHENTICATIONFAILED"
+        case .authorizationFailed: return "AUTHORIZATIONFAILED"
+        case .unavailable: return "UNAVAILABLE"
+        case .expired: return "EXPIRED"
+        case .privacyRequired: return "PRIVACYREQUIRED"
+        case .contactAdmin: return "CONTACTADMIN"
+        case .limit: return "LIMIT"
+        case .overQuota: return "OVERQUOTA"
+        case .alert: return "ALERT"
+        case .other(let name, _): return name.uppercased()
+        default: return String(describing: code).uppercased()
+        }
+    }
+
+    /// Whether a refused LOGIN means "these credentials are wrong", as opposed to the server
+    /// being unavailable, over a limit, or asking for something else. No code at all is the
+    /// common case for a wrong password (Bridge sends none).
+    static func isCredentialRefusal(_ text: ResponseText) -> Bool {
+        switch text.code {
+        case nil, .authenticationFailed?, .authorizationFailed?: return true
+        default: return false
         }
     }
 
@@ -275,12 +329,15 @@ public actor IMAPClient {
     public func login(user: String, password: String) async throws {
         // Copying from Bridge or a password manager can bring a stray space or line break along.
         // Neither Bridge nor iCloud app-specific credentials ever start or end with whitespace.
-        let user = user.trimmingCharacters(in: .whitespacesAndNewlines)
-        let password = password.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            try await run(.login(username: user, password: password), describe: "LOGIN")
-        } catch IMAPError.commandFailed(_, "NO", let text) {
-            throw IMAPError.loginRejected(text)
+        let user = Credentials.clean(user)
+        let password = Credentials.clean(password)
+        let tag = nextTag()
+        let result = try await sendUnchecked(tag: tag, parts: [.tagged(TaggedCommand(tag: tag, command: .login(username: user, password: password)))])
+        switch result.state {
+        case .ok: break
+        case .no(let text) where Self.isCredentialRefusal(text): throw IMAPError.loginRejected(Self.render(text))
+        case .no(let text): throw IMAPError.commandFailed(command: "LOGIN", status: "NO", text: Self.render(text))
+        case .bad(let text): throw IMAPError.commandFailed(command: "LOGIN", status: "BAD", text: Self.render(text))
         }
         try await refreshCapabilities()
     }

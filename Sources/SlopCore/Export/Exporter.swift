@@ -291,7 +291,10 @@ public final class Exporter: @unchecked Sendable {
                                         message: "Connection lost (\(error)); retrying in \(delay)"))
                 await client.close()
                 try await Task.sleep(for: delay)
-                if let fresh = try? await connect() { client = fresh }
+                // A reconnect that fails for a transient reason leaves the closed client in place, so
+                // the next attempt fails fast and backs off again. Anything else (a refused login,
+                // a changed certificate) will not fix itself, so it ends the run with its own message.
+                do { client = try await connect() } catch let reconnectError where Self.isTransient(reconnectError) {}
             }
         }
     }

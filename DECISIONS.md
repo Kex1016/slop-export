@@ -27,10 +27,10 @@ David can overrule any entry by saying so in the project. The agent then adds a 
 - Phase: 1 (follow-up to David's first real connect)
 - Context: David's first connect to his real Bridge was refused as wrong credentials, though he pasted the Bridge user name and Bridge-generated password.
 - Options: leave input as typed; trim whitespace and line breaks at login.
-- Decision: `IMAPClient.login` trims leading and trailing whitespace and line breaks from the user name and password. This covers the app, the CLI and Keychain items saved earlier. A NO to LOGIN becomes `IMAPError.loginRejected`, which shows the server's own words and says which Bridge credentials to use, including split address mode.
-- Why: neither Bridge credentials nor iCloud app-specific passwords can start or end with whitespace, and copying from Bridge or a password manager can add some. This is not yet confirmed as David's cause; the clearer error will show it on the next try. Tested by `testPastedWhitespaceAroundCredentialsIsIgnored`.
+- Decision: `Credentials.clean` trims leading and trailing whitespace, line breaks and invisible format characters (U+200B/C/D, U+2060, U+FEFF). `IMAPClient.login` applies it, which covers the app, the CLI and Keychain items saved earlier; the app also applies it to the user name it uses as the Keychain account and to passwords before saving them. A NO to LOGIN with no response code or with AUTHENTICATIONFAILED/AUTHORIZATIONFAILED becomes `IMAPError.loginRejected`, which shows the server's words with the code and says which credentials to use for Bridge and for iCloud. Other codes (UNAVAILABLE, LIMIT, ...) stay `commandFailed` with the code kept, so a busy server is not reported as a wrong password. Reconnects during export and upload no longer swallow non-transient errors: a refused login or changed certificate ends the run with its own message.
+- Why: neither Bridge credentials nor iCloud app-specific passwords can start or end with whitespace, and copying from Bridge or a password manager can add some. This is not yet confirmed as David's cause; the clearer error will show it on the next try. Tested by `testPastedWhitespaceAroundCredentialsIsIgnored`, `testInvisibleCharactersAroundCredentialsAreIgnored`, `testWrongICloudPasswordFailsCleanly` and `LoginErrorTests`.
 - Reversible: yes.
-- PR: (login fix PR)
+- PR: #8
 
 ### D-014: Phase 7 review outcomes and what was left as is
 - Date: 2026-11-02
