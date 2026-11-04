@@ -76,8 +76,40 @@ final class ProbeIntegrationTests: XCTestCase {
             _ = try await Probe.run(settings: fx.bridgeSettings, password: "not-the-password")
             XCTFail("logged in with a wrong password")
         } catch let error as IMAPError {
-            guard case .commandFailed(let command, _, _) = error else { return XCTFail("\(error)") }
-            XCTAssertEqual(command, "LOGIN")
+            guard case .loginRejected = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(error.description.contains("Mailbox details"))
+        }
+    }
+
+    func testPastedWhitespaceAroundCredentialsIsIgnored() async throws {
+        let fx = try FixtureServer.load("bridge")
+        var settings = fx.bridgeSettings
+        settings.user = " \(fx.user)\n"
+        let report = try await Probe.run(settings: settings, password: fx.password + " \r\n")
+        XCTAssertEqual(report.allMailCount, 13)
+    }
+
+    func testInvisibleCharactersAroundCredentialsAreIgnored() async throws {
+        let fx = try FixtureServer.load("bridge")
+        var settings = fx.bridgeSettings
+        settings.user = "\u{FEFF}\(fx.user)\u{200B}"
+        let report = try await Probe.run(settings: settings, password: "\u{2060}" + fx.password + "\u{200B}")
+        XCTAssertEqual(report.allMailCount, 13)
+    }
+
+    /// Dovecot answers a wrong password with NO [AUTHENTICATIONFAILED], as iCloud does.
+    func testWrongICloudPasswordFailsCleanly() async throws {
+        let fx = try FixtureServer.load("icloud")
+        let endpoint = ServerEndpoint(host: fx.host, port: fx.port, tls: .implicit,
+                                      trust: .pinned(try PinnedCertificate(contentsOf: URL(fileURLWithPath: fx.cert))))
+        do {
+            let client = try await IMAPClient.connectAndLogin(to: endpoint, user: fx.user, password: "not-the-password")
+            await client.close()
+            XCTFail("logged in with a wrong password")
+        } catch let error as IMAPError {
+            guard case .loginRejected(let text) = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(text.contains("AUTHENTICATIONFAILED"), text)
+            XCTAssertTrue(error.description.contains("app-specific password"))
         }
     }
 }
