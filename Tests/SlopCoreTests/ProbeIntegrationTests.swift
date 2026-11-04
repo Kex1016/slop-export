@@ -76,8 +76,16 @@ final class ProbeIntegrationTests: XCTestCase {
             _ = try await Probe.run(settings: fx.bridgeSettings, password: "not-the-password")
             XCTFail("logged in with a wrong password")
         } catch let error as IMAPError {
-            guard case .commandFailed(let command, _, _) = error else { return XCTFail("\(error)") }
-            XCTAssertEqual(command, "LOGIN")
+            guard case .loginRejected = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(error.description.contains("Mailbox details"))
         }
+    }
+
+    func testPastedWhitespaceAroundCredentialsIsIgnored() async throws {
+        let fx = try FixtureServer.load("bridge")
+        var settings = fx.bridgeSettings
+        settings.user = " \(fx.user)\n"
+        let report = try await Probe.run(settings: settings, password: fx.password + " \r\n")
+        XCTAssertEqual(report.allMailCount, 13)
     }
 }

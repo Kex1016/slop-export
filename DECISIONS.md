@@ -21,6 +21,17 @@ David can overrule any entry by saying so in the project. The agent then adds a 
 
 ## Entries
 
+### D-015: Trim pasted credentials and explain a refused login
+- Date: 2026-11-04
+- Status: accepted
+- Phase: 1 (follow-up to David's first real connect)
+- Context: David's first connect to his real Bridge was refused as wrong credentials, though he pasted the Bridge user name and Bridge-generated password.
+- Options: leave input as typed; trim whitespace and line breaks at login.
+- Decision: `IMAPClient.login` trims leading and trailing whitespace and line breaks from the user name and password. This covers the app, the CLI and Keychain items saved earlier. A NO to LOGIN becomes `IMAPError.loginRejected`, which shows the server's own words and says which Bridge credentials to use, including split address mode.
+- Why: neither Bridge credentials nor iCloud app-specific passwords can start or end with whitespace, and copying from Bridge or a password manager can add some. This is not yet confirmed as David's cause; the clearer error will show it on the next try. Tested by `testPastedWhitespaceAroundCredentialsIsIgnored`.
+- Reversible: yes.
+- PR: (login fix PR)
+
 ### D-014: Phase 7 review outcomes and what was left as is
 - Date: 2026-11-02
 - Status: accepted

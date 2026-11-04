@@ -41,6 +41,8 @@ public enum IMAPError: Error, CustomStringConvertible, Sendable {
     case bye(String)
     case tls(String)
     case commandFailed(command: String, status: String, text: String)
+    /// LOGIN was refused: wrong user name or password, as far as the server is concerned.
+    case loginRejected(String)
     case unexpected(String)
 
     public var description: String {
@@ -53,6 +55,10 @@ public enum IMAPError: Error, CustomStringConvertible, Sendable {
         case .bye(let text): return "The server ended the session: \(text)"
         case .tls(let text): return "Secure connection failed: \(text)"
         case .commandFailed(let command, let status, let text): return "\(command) failed (\(status)): \(text)"
+        case .loginRejected(let text):
+            return "The server did not accept the user name and password (it said: \(text)). "
+                + "For Bridge, use the user name and password Bridge shows for this account (Mailbox details), "
+                + "not your Proton login. If Bridge shows a separate entry per address (split mode), use that address's details."
         case .unexpected(let text): return "Unexpected IMAP behaviour: \(text)"
         }
     }
@@ -267,7 +273,15 @@ public actor IMAPClient {
 
     /// LOGIN. The password goes over TLS only; this client never connects without it.
     public func login(user: String, password: String) async throws {
-        try await run(.login(username: user, password: password), describe: "LOGIN")
+        // Copying from Bridge or a password manager can bring a stray space or line break along.
+        // Neither Bridge nor iCloud app-specific credentials ever start or end with whitespace.
+        let user = user.trimmingCharacters(in: .whitespacesAndNewlines)
+        let password = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            try await run(.login(username: user, password: password), describe: "LOGIN")
+        } catch IMAPError.commandFailed(_, "NO", let text) {
+            throw IMAPError.loginRejected(text)
+        }
         try await refreshCapabilities()
     }
 
