@@ -43,6 +43,22 @@ These will become full entries when their phase starts:
 
 ## Entries
 
+### MT-009: Try the Linux app on your Mint or Ubuntu machine (optional)
+- Status: pending
+- Added: 2026-11-18 by "Add GTK3 GUI for Linux Mint and Ubuntu"
+- Phase / PR: D-016, (Linux app PR)
+- Why David: his device and his Bridge; human judgement on how the app looks on his desktop
+- Before you start: Proton Mail Bridge for Linux installed, signed in and synced, and its certificate exported (Bridge › Settings › Advanced settings › Export TLS certificates). Until a release with the `.deb` is published (MT-008), download `slop-export-deb` from the latest green CI run on GitHub (Actions › CI › the run › Artifacts) and unzip it.
+- Steps:
+  1. In a terminal in the download folder: `sudo apt install ./slop-export_0.1.0_amd64.deb`. (Or double-click the `.deb` and click Install.)
+  2. Open **Slop Export** from the applications menu.
+  3. In Connect, enter the Bridge user name and password and choose the certificate, then **Connect and scan**. If the keyring asks to unlock or to create a keyring, allow it.
+  4. Check the Scan list. Optional: Export into a folder with enough space and run Verify with only "Compare with Bridge's live counts" on.
+  5. Close the app, reopen it, and check the Connect fields are filled and the password field says "Saved in your keyring".
+- Expected: the window looks right in your theme (light or dark), the mailbox list matches what MT-002 showed on the Mac, and nothing asks for your Proton or Apple ID password. Do not use Upload yet; the first real iCloud upload still waits for your go-ahead (MT-006).
+- Report back: your distro and version, "scan worked" or the error text, and anything that looks off (a screenshot with names blurred is fine).
+- Result:
+
 ### MT-008: Publish the first release (v0.1.0)
 - Status: pending
 - Added: 2026-11-02 by "Build the Proton to iCloud exporter"

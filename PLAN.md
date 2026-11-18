@@ -22,6 +22,7 @@ Export every message David has in Proton Mail, with all of its folders and flags
 - **Sandbox:** App Sandbox on, with the network client entitlement and user-selected read/write file access (export folder and Bridge cert are chosen in an open panel and kept as security-scoped bookmarks).
 - **App flow:** a window with five steps: Connect (Bridge host, port, cert, password) → Scan (mailbox list with counts and sizes) → Export (progress per folder, pause, resume) → Verify (Swift Charts, Proton vs export vs iCloud) → Upload (iCloud credentials, dry run, then upload). Each step shows what is left and survives quitting the app.
 - **Packaging:** Xcode project generated from a checked-in spec (XcodeGen or Tuist, decided in Phase 0), built with `xcodebuild`, shipped as a zipped `.app` and a `.dmg` attached to a GitHub Release.
+- **Linux (D-016):** a GTK 3 app for Ubuntu 22.04+ and Linux Mint 21+ in `Linux/`, a separate Swift package on the same `SlopCore`, with the same five steps. Passwords go to the desktop keyring (libsecret). Shipped as a `.deb` next to the macOS downloads. The macOS app stays the primary app and the acceptance criteria below are unchanged.
 - **Signing:** ad-hoc signed by default, so it runs on David's Mac after a one-time "Open anyway" in System Settings. If David has an Apple Developer account, add Developer ID signing and notarization in CI (secrets stored in GitHub Actions, never in the repo).
 
 ## How the pieces fit

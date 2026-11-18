@@ -71,6 +71,105 @@ jobs:
         if: failure()
         run: tail -n 100 /tmp/slopfx/*/dovecot.log || true
 
+  linux-app:
+    name: Linux app (GTK, keyring, GUI end-to-end)
+    runs-on: ubuntu-24.04
+    container: swift:6.1-noble
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: slop-export  # the Linux package refers to the root package by this folder name
+      - name: Install GTK, libsecret, the fixtures and a headless desktop
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            libgtk-3-dev libsecret-1-dev dovecot-imapd python3 openssl xvfb xdotool imagemagick \
+            dbus dbus-x11 gnome-keyring libsecret-tools at-spi2-core adwaita-icon-theme fonts-dejavu-core >/dev/null
+      - uses: actions/cache@v4
+        with:
+          path: slop-export/Linux/.build
+          key: linux-app-build-${{ hashFiles('slop-export/Linux/Package.resolved', 'slop-export/Linux/Package.swift') }}
+      - name: Build
+        working-directory: slop-export
+        run: swift build --package-path Linux --build-tests
+      - name: Start fixture servers
+        working-directory: slop-export
+        run: python3 Fixtures/slopfixture.py up --dir /tmp/slopfx
+      - name: Test (with a real keyring in a private D-Bus session)
+        working-directory: slop-export
+        env:
+          SLOP_FIXTURE_DIR: /tmp/slopfx
+          SLOP_REQUIRE_FIXTURES: "1"
+          SLOP_TEST_KEYRING: "1"
+        run: |
+          dbus-run-session -- sh -ec 'printf ci | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            swift test --package-path Linux'
+      - name: Drive the GTK app through all five steps
+        working-directory: slop-export
+        run: scripts/linux-gui-e2e.sh "$(swift build --package-path Linux --show-bin-path)/slop-export-gtk" /tmp/screenshots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-app-screenshots
+          path: /tmp/screenshots
+          if-no-files-found: ignore
+      - name: Fixture server logs
+        if: failure()
+        run: tail -n 100 /tmp/slopfx/*/dovecot.log || true
+
+  linux-deb:
+    name: Linux package (.deb, built on Ubuntu 22.04)
+    runs-on: ubuntu-24.04
+    container: swift:6.1-jammy
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: slop-export
+      - name: Install GTK and libsecret headers
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends libgtk-3-dev libsecret-1-dev dpkg-dev >/dev/null
+      - name: Build and package
+        working-directory: slop-export
+        run: scripts/package-deb.sh dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slop-export-deb
+          path: slop-export/dist/*
+
+  linux-deb-install:
+    name: Install the .deb on ${{ matrix.image }} and run it
+    needs: linux-deb
+    runs-on: ubuntu-24.04
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:22.04", "ubuntu:24.04"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: slop-export-deb
+          path: dist
+      - name: Install the package (no Swift on this machine)
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ./dist/slop-export_*.deb >/dev/null
+          slop-export-gtk --version
+      - name: Install the fixtures and a headless desktop
+        run: |
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            dovecot-imapd python3 openssl xvfb xdotool imagemagick dbus dbus-x11 gnome-keyring libsecret-tools at-spi2-core >/dev/null
+      - name: Drive the installed app through all five steps
+        run: scripts/linux-gui-e2e.sh /usr/bin/slop-export-gtk /tmp/screenshots
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: deb-install-failure-${{ strategy.job-index }}
+          path: /tmp/screenshots
+          if-no-files-found: ignore
+
   macos:
     name: macOS (app, UI tests, package)
     runs-on: macos-15
@@ -111,7 +210,7 @@ jobs:
   release:
     name: Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, macos]
+    needs: [linux, linux-app, linux-deb-install, macos]
     runs-on: macos-15
     permissions:
       contents: write
@@ -125,6 +224,10 @@ jobs:
             -destination 'generic/platform=macOS' -derivedDataPath build ONLY_ACTIVE_ARCH=NO build
       - name: Package (ad-hoc signed, D-002)
         run: scripts/package-app.sh build/Build/Products/Release/SlopExport.app dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: slop-export-deb
+          path: dist
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*

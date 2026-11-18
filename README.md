@@ -1,8 +1,8 @@
 # Slop Export
 
-A Mac app that copies all your Proton Mail into iCloud Mail. It reads your mail through Proton Mail Bridge, keeps a full copy on your Mac, and then uploads that copy to iCloud with folders, dates, and read and flag state kept.
+A Mac app, and a Linux app for Ubuntu and Linux Mint, that copies all your Proton Mail into iCloud Mail. It reads your mail through Proton Mail Bridge, keeps a full copy on your Mac, and then uploads that copy to iCloud with folders, dates, and read and flag state kept.
 
-It never changes anything in Proton: it only reads. It never sees your Proton or Apple ID password. Bridge has its own password, and iCloud uses an app-specific password. Both are stored in your Mac's Keychain.
+It never changes anything in Proton: it only reads. It never sees your Proton or Apple ID password. Bridge has its own password, and iCloud uses an app-specific password. Both are stored in your Mac's Keychain, or in your keyring on Linux.
 
 ## What you need
 
@@ -70,6 +70,24 @@ Open Mail on iCloud.com or your iPhone and spot-check a few messages:
 - attachments open, and non-English text displays correctly;
 - Unfiled holds the messages that were only in All Mail.
 
+## On Ubuntu or Linux Mint
+
+The Linux app has the same five steps, wording and checks as the Mac app. Only the differences are listed here.
+
+**What you need:** Ubuntu 22.04 or newer, or Linux Mint 21 or newer (64-bit Intel/AMD), [Proton Mail Bridge for Linux](https://proton.me/mail/bridge), and a keyring (GNOME Keyring, which Ubuntu and Mint include).
+
+**Install:** download `slop-export_<version>_amd64.deb` from the [latest release](https://github.com/Kex1016/slop-export/releases/latest), then double-click it and click **Install**, or run `sudo apt install ./slop-export_*_amd64.deb`. Open **Slop Export** from the applications menu. No Swift or other runtime is needed.
+
+**Differences from the Mac app:**
+- Passwords are saved in your keyring (open **Passwords and Keys** to see or delete the `slop-export` items), not the Keychain. If the keyring asks to be unlocked or created, allow it.
+- **Ctrl+1** to **Ctrl+5** jump between steps; **Ctrl+Q** quits. Quitting mid-export is safe, as on the Mac.
+- Settings (host, port, user names, certificate, export folder, never passwords) are in `~/.config/slop-export/settings.json`.
+- The Verify step shows a table with an "In iCloud" bar per folder instead of a chart, and saves the same HTML and text reports.
+- **Build Apple Mail mailboxes** still writes Apple Mail's format, for importing on a Mac. On Linux, use the Upload step.
+- An export folder made on one system can be copied to the other and resumed there.
+
+To remove it: `sudo apt remove slop-export`. Delete the export folder and the keyring items yourself.
+
 ## Where your data goes
 
 - The export folder you choose holds your mail as plain `.eml` files, plus progress files (`journal.jsonl`, `upload.jsonl`, `manifest.json`). Delete it when you are done.
@@ -85,4 +103,4 @@ Open Mail on iCloud.com or your iPhone and spot-check a few messages:
 
 ## For developers
 
-The app is a SwiftUI front end on `SlopCore`, a Swift package that also powers a command-line tool (`swift run slop-export --help`) used for testing against local Dovecot fixture servers. `CLAUDE.md` has the build and test commands. `PLAN.md`, `DECISIONS.md` and `MANUAL-TESTS.md` describe the plan, the choices made and the checks only a person can do.
+The Mac app is a SwiftUI front end on `SlopCore`; the Linux app (`Linux/`) is a GTK 3 front end on the same `SlopCore`, a Swift package that also powers a command-line tool (`swift run slop-export --help`) used for testing against local Dovecot fixture servers. `CLAUDE.md` has the build and test commands. `PLAN.md`, `DECISIONS.md` and `MANUAL-TESTS.md` describe the plan, the choices made and the checks only a person can do.

@@ -21,6 +21,25 @@ David can overrule any entry by saying so in the project. The agent then adds a 
 
 ## Entries
 
+### D-016: A GTK 3 app for Linux Mint and Ubuntu, beside the macOS app
+- Date: 2026-11-18
+- Status: accepted (adds to D-002; the macOS app is unchanged and still the primary app)
+- Phase: 7 follow-up (David asked for a GTK3 GUI for Linux Mint / Ubuntu)
+- Context: David wants the exporter to run on Linux Mint and Ubuntu with a GTK 3 interface, without losing the macOS app he called crucial, and without forking the export logic.
+- Options: (a) Python + PyGObject calling the `slop-export` CLI; (b) Swift calling GTK 3's C API directly, linking `SlopCore`; (c) a cross-platform toolkit (Qt, web view).
+- Decision: (b). A separate Swift package in `Linux/` depends on the root package by path and links `SlopCore`, so no IMAP, export, upload or verify code is duplicated. It has three parts:
+  - `SlopLinux` (no GTK): `Session`, the Linux counterpart of the macOS `AppModel`, with the same five steps, the same guards (no upload without a fresh dry run for that Apple ID, verify only reads) and the same folder layout (`Proton Export`, `Apple Mail Import`), so one export folder can be resumed on either system. Tested headless against the fixtures, including a full connect-scan-export-mbox-upload-verify run.
+  - `slop-export-gtk`: GTK 3 widgets only (GtkStackSidebar with the five steps, forms, GtkTreeView tables, native file choosers, an error bar per step, Ctrl+1 to Ctrl+5). Swift's main actor runs on GTK's main loop by watching libdispatch's main-queue file descriptor from GLib (the hook CoreFoundation uses on Linux), so there is no polling. GtkApplication keeps it to one instance, so two windows cannot export into the same folder at once.
+  - Passwords go to the desktop keyring through libsecret (GNOME Keyring on Ubuntu and Mint), items with `service` = `slop-export.bridge`/`slop-export.icloud` and `account` = user name, like the macOS Keychain items. Settings (no passwords) are in `~/.config/slop-export/settings.json`, mode 0600. The certificate is kept as DER bytes as on macOS (D-008). The Bridge certificate is pinned exactly as on macOS; TLS is never relaxed.
+  - The root package is untouched, so `swift build` still needs no GTK headers, and the macOS jobs are unaffected apart from SwiftLint now also linting `Linux/`.
+  - Packaging: a `.deb` built on Ubuntu 22.04 with the Swift runtime linked statically, so it installs on Ubuntu 22.04+ and Linux Mint 21+ with no Swift. It is attached to releases next to the `.dmg`.
+  - Tests: CI job `linux-app` runs the session tests with a real keyring in a private D-Bus session, then drives the real window through all five steps under Xvfb with xdotool (`scripts/linux-gui-e2e.sh`) and uploads screenshots. `linux-deb-install` installs the `.deb` on clean `ubuntu:22.04` and `ubuntu:24.04` containers and runs the same drive against the installed binary. For that drive only, `SLOP_ICLOUD_TEST_SERVER` + `SLOP_ICLOUD_TEST_CERT` point the Upload step at the iCloud fixture; the server is accepted only with that exact pinned certificate.
+- Why: (b) keeps one language and one core, the GUI is checked end to end in CI, and the app installs like any other `.deb`. (a) would put a second code path (CLI output parsing) between the GUI and the core; (c) is not GTK 3. Checked locally on 2026-11-18: 8 session tests pass, and the GUI drive passes on the debug build and on the `.deb` installed in clean Ubuntu 22.04 and 24.04.
+- Reversible: yes. Deleting `Linux/`, the two scripts and the three CI jobs removes it; nothing else depends on it.
+- Code review (medium) changes: only one task at a time may use the export folder (export, mailbox build, dry run, upload, verify), and the folder cannot be changed while one runs. A dry run whose Apple ID or folder changed while it ran is dropped. Ticked Bridge or iCloud comparisons that cannot run are spelled out on the Verify step. A damaged settings file is moved aside to `settings.json.damaged` instead of being overwritten, and the file is created as 0600. The upload confirmation names the cleaned Apple ID. `ExportLayout` in SlopCore now holds the two folder names for both apps (the macOS `AppModel` uses it too, with no change in behaviour).
+- Not done: the Linux CLI still reads passwords only from environment variables (it does not read the keyring). No Flatpak or AppImage; arm64 `.deb` is not built (CI runners are x86_64). Labels stay out of scope (D-001).
+- PR: (this PR)
+
 ### D-015: Trim pasted credentials and explain a refused login
 - Date: 2026-11-04
 - Status: accepted
