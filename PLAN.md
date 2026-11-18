@@ -72,7 +72,7 @@ Each phase ends with a merged PR, its tests green, and its manual checks logged.
 - CI on GitHub Actions:
   - `linux` job (ubuntu): `swift build`, `swift test` for `SlopCore` and the CLI, plus integration tests against the Docker fixture servers (Docker is only available on Linux runners).
   - `macos` job (`macos-15`, latest Xcode): build the universal app with `xcodebuild`, run unit and UI tests, `swiftlint`, and upload the zipped `.app` as a build artifact.
-  - `release` job on tags: build, sign (ad-hoc, or Developer ID plus notarization when secrets exist), and attach `.zip` and `.dmg` to a GitHub Release.
+  - Release workflow, started by hand with a version (D-017; replaces the original `release` job on tags): runs all of CI with the version stamped in, signs (ad-hoc, or Developer ID plus notarization when secrets exist), and attaches `.zip`, `.dmg` and the Linux `.deb` to a GitHub Release.
 - `.gitignore` for exports, `.env`, certs, `DerivedData`, `build/`.
 - Run the `init` skill to write `CLAUDE.md` once there is code.
 

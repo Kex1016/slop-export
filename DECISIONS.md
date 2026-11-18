@@ -21,6 +21,17 @@ David can overrule any entry by saying so in the project. The agent then adds a 
 
 ## Entries
 
+### D-017: Releases are made by hand from a Release workflow
+- Date: 2026-11-18
+- Status: accepted (replaces the tag-triggered `release` job in `ci.yml`)
+- Phase: 0 (CI), follow-up to D-016
+- Context: David asked for a workflow he starts himself that builds and publishes a release. Until now a release needed a tag made on the Releases page (MT-008), and the `release` job rebuilt the app separately from the jobs that tested it.
+- Options: keep the tag trigger and document it; a `workflow_dispatch` workflow with its own build steps; a `workflow_dispatch` workflow that calls `ci.yml` as a reusable workflow and publishes its artifacts.
+- Decision: `.github/workflows/release.yml`, run from Actions › Release › Run workflow with a version (`0.2.0`), and optional pre-release, draft and dry-run boxes (a dry run builds and tests everything and keeps the files as run artifacts, publishing nothing). It checks the version is `X.Y.Z`, not tagged yet and newer than the latest `v*` tag; runs all of `ci.yml` (`workflow_call`) with that version; and only if every job passes, publishes `vX.Y.Z` at the commit it built, with `SlopExport.dmg`, `SlopExport.zip`, `slop-export_X.Y.Z_amd64.deb`, one `SHA256SUMS.txt` and GitHub's generated notes. `scripts/set-version.sh` stamps the version into `SlopVersion.current` and the app's `MARKETING_VERSION` (build number = run number) in the CI checkout only; nothing is committed, so the version in the sources is just the dev-build default. The `macos` job checks the built app's `CFBundleShortVersionString`. The old `release` job and the `v*` tag trigger are removed: a reusable workflow cannot contain a job asking for `contents: write` when the caller grants `read`, and two release paths would disagree. CI's concurrency group now includes the workflow name so a release run and a push run on `main` never cancel each other. Builds stay ad-hoc signed (D-002); Developer ID signing and notarization wait on David's Apple Developer account and would add secrets to the macOS job only.
+- Why: the released files are the exact ones the Linux, GTK, .deb install and macOS jobs built and tested, with no second build. The tag is made by the workflow with `GITHUB_TOKEN`, which agents cannot do from their sessions (MT-008).
+- Reversible: yes. Re-add the tag trigger and a job that downloads the same artifacts.
+- PR: (this PR)
+
 ### D-016: A GTK 3 app for Linux Mint and Ubuntu, beside the macOS app
 - Date: 2026-11-18
 - Status: accepted (adds to D-002; the macOS app is unchanged and still the primary app)

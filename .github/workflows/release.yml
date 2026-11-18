@@ -1,0 +1,116 @@
+name: Release
+
+# Run by hand from Actions › Release › "Run workflow" (D-017). It tags the chosen branch,
+# runs the full CI (ci.yml) with the version stamped in, and publishes a GitHub Release with
+# the macOS app (.dmg, .zip) and the Linux .deb. Nothing is published unless every CI job passes.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, like 0.2.0 (the tag will be v0.2.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark as a pre-release"
+        type: boolean
+        default: false
+      draft:
+        description: "Save as a draft (publish it yourself from the Releases page)"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Dry run: build and test everything, but publish nothing (files go to the run's artifacts)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check the version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        name: Version is X.Y.Z, newer than the latest release, and not tagged yet
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="${VERSION#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must look like 0.2.0, got '$VERSION'"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::Tag v$VERSION already exists. Pick a new version."
+            exit 1
+          fi
+          LATEST=$(git ls-remote --tags --refs origin 'refs/tags/v*' | sed 's|.*refs/tags/v||' \
+            | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+          if [ -n "$LATEST" ] && [ "$(printf '%s\n%s\n' "$LATEST" "$VERSION" | sort -V | tail -n1)" != "$VERSION" ]; then
+            echo "::error::Version $VERSION is older than the latest release v$LATEST."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION from $GITHUB_REF_NAME at $GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+  ci:
+    name: CI
+    needs: check
+    uses: ./.github/workflows/ci.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+
+  publish:
+    name: Publish the release
+    needs: [check, ci]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: SlopExport-app
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: slop-export-deb
+          path: dist
+      - name: Check the files and write one checksum list
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        working-directory: dist
+        run: |
+          ls -l
+          test -s SlopExport.dmg
+          test -s SlopExport.zip
+          test -s "slop-export_${VERSION}_amd64.deb"
+          rm -f SHA256SUMS.txt ./*.sha256
+          sha256sum SlopExport.dmg SlopExport.zip "slop-export_${VERSION}_amd64.deb" | tee SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        if: inputs.dry_run
+        with:
+          name: release-files
+          path: dist/*
+      - uses: softprops/action-gh-release@v2
+        if: ${{ !inputs.dry_run }}
+        with:
+          tag_name: v${{ needs.check.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: Slop Export ${{ needs.check.outputs.version }}
+          generate_release_notes: true
+          prerelease: ${{ inputs.prerelease }}
+          draft: ${{ inputs.draft }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/SlopExport.dmg
+            dist/SlopExport.zip
+            dist/slop-export_${{ needs.check.outputs.version }}_amd64.deb
+            dist/SHA256SUMS.txt
