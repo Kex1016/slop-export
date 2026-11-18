@@ -52,6 +52,10 @@ shot() { sleep 1; import -window root "$SHOTS/$1.png"; }
 key() { xdotool key --clearmodifiers "$@"; sleep 0.3; }
 type_text() { xdotool type --delay 20 "$1"; sleep 0.3; }
 
+# Xvfb takes a moment to accept connections; starting the app before that fails with
+# "cannot open display".
+wait_for 20 "the X server" sh -c 'xdotool getdisplaygeometry >/dev/null 2>&1'
+
 "$BIN" >"$WORK/app.log" 2>&1 &
 APP=$!
 wait_for 20 "the window" sh -c 'xdotool search --name "^Slop Export$" >/dev/null 2>&1'
