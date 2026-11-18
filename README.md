@@ -103,6 +103,6 @@ To remove it: `sudo apt remove slop-export`. Delete the export folder and the ke
 
 ## For developers
 
-The Mac app is a SwiftUI front end on `SlopCore`; the Linux app (`Linux/`) is a GTK 3 front end on the same `SlopCore`, a Swift package that also powers a command-line tool (`swift run slop-export --help`) used for testing against local Dovecot fixture servers. `CLAUDE.md` has the build and test commands.
+The Mac app is a SwiftUI front end on `SlopCore`; the Linux app (`Linux/`) is a GTK 3 front end on the same `SlopCore`, a Swift package that also powers a command-line tool (`swift run slop-export --help`) used for testing against local Dovecot fixture servers. `CLAUDE.md` has the build and test commands. `PLAN.md`, `DECISIONS.md` and `MANUAL-TESTS.md` describe the plan, the choices made and the checks only a person can do.
 
-To make a release, open **Actions › Release › Run workflow**, enter a version such as `0.2.0` and run it. It runs every CI job with that version built in and, only if all pass, publishes `v0.2.0` with the `.dmg`, `.zip`, `.deb` and checksums (D-017). `PLAN.md`, `DECISIONS.md` and `MANUAL-TESTS.md` describe the plan, the choices made and the checks only a person can do.
+To make a release, open **Actions › Release › Run workflow**, enter a version such as `0.2.0` and run it. It runs every CI job with that version built in and, only if all pass, publishes `v0.2.0` with the `.dmg`, `.zip`, `.deb` and checksums (D-017).
