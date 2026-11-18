@@ -1,0 +1,123 @@
+name: Release
+
+# Run by hand from Actions › Release › "Run workflow" on main (D-017). It runs the full CI
+# (ci.yml) with the version stamped in and, only if every job passes, tags the commit it built
+# and publishes a GitHub Release with the macOS app (.dmg, .zip) and the Linux .deb.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, like 0.2.0 (the tag will be v0.2.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark as a pre-release"
+        type: boolean
+        default: false
+      draft:
+        description: "Save as a draft (publish it yourself from the Releases page)"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Dry run: build and test everything, publish nothing (files go to the run's artifacts)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check the version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        name: Version is X.Y.Z, newer than the latest release, and not tagged yet
+        env:
+          VERSION: ${{ inputs.version }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          VERSION="${VERSION#v}"
+          scripts/set-version.sh --check "$VERSION"
+          if [ "$GITHUB_REF" != "refs/heads/main" ] && [ "$DRY_RUN" != "true" ]; then
+            echo "::error::Releases are made from main. Pick main under 'Use workflow from', or tick 'Dry run'."
+            exit 1
+          fi
+          TAGS=$(git ls-remote --tags --refs origin 'refs/tags/v*') || {
+            echo "::error::Could not list the repository's tags. Run the workflow again."
+            exit 1
+          }
+          if grep -q "refs/tags/v$VERSION\$" <<<"$TAGS"; then
+            echo "::error::Tag v$VERSION already exists. Pick a new version."
+            exit 1
+          fi
+          LATEST=$(sed 's|.*refs/tags/v||' <<<"$TAGS" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
+          if [ -n "$LATEST" ] && [ "$(printf '%s\n%s\n' "$LATEST" "$VERSION" | sort -V | tail -n1)" != "$VERSION" ]; then
+            echo "::error::Version $VERSION is older than the latest release v$LATEST."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing v$VERSION from $GITHUB_REF_NAME at $GITHUB_SHA (dry run: $DRY_RUN)" >> "$GITHUB_STEP_SUMMARY"
+
+  ci:
+    name: CI
+    needs: check
+    uses: ./.github/workflows/ci.yml
+    with:
+      version: ${{ needs.check.outputs.version }}
+
+  publish:
+    name: Publish the release
+    needs: [check, ci]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: SlopExport-app
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: slop-export-deb
+          path: dist
+      - name: Check the files and write one checksum list
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        working-directory: dist
+        run: |
+          ls -l
+          test -s SlopExport.dmg
+          test -s SlopExport.zip
+          test -s "slop-export_${VERSION}_amd64.deb"
+          rm -f SHA256SUMS.txt ./*.sha256
+          sha256sum SlopExport.dmg SlopExport.zip "slop-export_${VERSION}_amd64.deb" | tee SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        if: inputs.dry_run
+        with:
+          name: release-files
+          path: dist/*
+      - name: Publish v${{ needs.check.outputs.version }}
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          DRAFT: ${{ inputs.draft }}
+        run: |
+          # Check again here: a draft has no tag yet, and another run may have published meanwhile.
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::A release or draft for v$VERSION already exists. Publish or delete it on the Releases page, or pick a new version."
+            exit 1
+          fi
+          FLAGS=()
+          if [ "$PRERELEASE" = "true" ]; then FLAGS+=(--prerelease); fi
+          if [ "$DRAFT" = "true" ]; then FLAGS+=(--draft); fi
+          # With files given, gh uploads them to a draft first and publishes (which makes the tag)
+          # only after every upload succeeded, so a failed upload leaves no tag behind.
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Slop Export $VERSION" --generate-notes "${FLAGS[@]}" \
+            dist/SlopExport.dmg dist/SlopExport.zip "dist/slop-export_${VERSION}_amd64.deb" dist/SHA256SUMS.txt
