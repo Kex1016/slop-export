@@ -21,6 +21,17 @@ David can overrule any entry by saying so in the project. The agent then adds a 
 
 ## Entries
 
+### D-018: Upload over several connections at once
+- Date: 2026-11-18
+- Status: accepted (refines D-011; the duplicate check is unchanged)
+- Phase: 5
+- Context: David's real upload was very slow. The uploader sent one APPEND, waited for iCloud's answer, fsynced the journal, slept 50 ms and only then sent the next, all on one connection. swift-nio-imap 0.4.0 always uses synchronizing literals for APPEND (its own "LITERAL+ is broken for APPEND" workaround), so every message costs two network round trips plus the server's own time, and the wire sits idle almost all the time.
+- Options: pipeline APPENDs on one connection (needs LITERAL+, which the pinned library turns off, and a rewrite of `ResponseCollector` for several commands in flight); MULTIAPPEND (RFC 3502; not advertised by the fixture, and one refused message fails the whole batch); several connections, each still one command at a time.
+- Decision: `Uploader.Options.connections`, default 4 (CLI `--connections 1...8`). `run()` first creates every folder and decides on one connection what is already there (journal, then the folder's Message-ID + size + date multiset, as in D-011), then queues the rest as work units: the messages of one folder that share a presence key, in date order. Up to 4 connections take units from a shared `UploadRun` actor, which also owns the journal writes, the counts and the summary, so `upload.jsonl` has one writer. Keeping same-key messages on one connection keeps the D-011 retry check exact: after a dropped APPEND, the folder's count of that key can only have grown by this connection's own copy. An extra connection that cannot log in (for example, iCloud capping connections per account) is dropped with a progress note and the others carry on. The fixed 50 ms pause is gone. Instead, a NO to APPEND that reads as "busy" (`[UNAVAILABLE]`, `[INUSE]`, "try again", "throttl", "rate limit"; not `[LIMIT]`, which can mean the message is too big, and never anything mentioning quota) waits with the same exponential backoff as a dropped connection and retries the same message, and after `maxRetries` stops the run with "iCloud stopped accepting messages", so throttling never lands messages in `Not uploaded`. Progress now counts the whole upload (done of total, with the folder of the latest message) rather than restarting per folder, since several folders can be in flight at once. Messages land in each folder slightly out of date order; Mail sorts by date, and INTERNALDATE is kept.
+- Why: 4 is a modest number of connections for one account, and it hides most of the round-trip time. Apple does not publish a limit; if iCloud turns some away, the upload keeps going on fewer. Measured against the fixture behind a proxy adding 50 ms each way, 213 messages: old build 64 s, new build with 1 connection 53 s (no pause), with 4 connections 18 s. Tests: one connection and four give identical folders, flags and dates; a capped account (only the first login works) still uploads everything over one connection; a run cancelled part way then resumed with the journal deleted adds exactly the missing messages.
+- Reversible: yes; `connections = 1` is the old behaviour without the pause.
+- PR: (this PR)
+
 ### D-017: Releases are made by hand from a Release workflow
 - Date: 2026-11-18
 - Status: accepted (replaces the tag-triggered `release` job in `ci.yml`)

@@ -88,8 +88,12 @@ public struct UploadProgress: Sendable {
 /// date) so a crash between an APPEND and its journal line never causes a second copy (D-011).
 public final class Uploader: @unchecked Sendable {
     public struct Options: Sendable {
-        /// Pause between APPENDs, to stay well under iCloud's rate limits.
-        public var delayBetweenMessages: Duration = .milliseconds(50)
+        /// How many connections upload at once. Each waits for iCloud to confirm one APPEND
+        /// before sending the next, so this is what hides the round trip (D-018).
+        public var connections = 4
+        /// Pause after each APPEND on a connection. iCloud's "busy" answers are handled by
+        /// waiting and retrying instead, so none by default.
+        public var delayBetweenMessages: Duration = .zero
         /// This many refusals in a row means the server is refusing everything (throttling,
         /// quota), not that these particular messages are bad, so the upload stops.
         public var maxConsecutiveRefusals = 3
@@ -183,7 +187,8 @@ public final class Uploader: @unchecked Sendable {
     // MARK: Upload
 
     /// Uploads everything not already in iCloud. Checks the quota first and stops before
-    /// writing anything if the upload will not fit.
+    /// writing anything if the upload will not fit. Uses up to `Options.connections` connections
+    /// at once (D-018).
     public func run() async throws -> UploadSummary {
         var client = try await connect()
         defer { Task { [client] in await client.close() } }
@@ -193,89 +198,15 @@ public final class Uploader: @unchecked Sendable {
         if let missing = plan.shortfall {
             throw UploadError.notEnoughSpace(needed: plan.bytesToUpload, missing: missing)
         }
-
-        var summary = UploadSummary(uploaded: 0, alreadyThere: 0, failed: 0, foldersCreated: [])
-        var bytes = 0
-        /// Refusals not yet recorded: only kept as real refusals once a later message gets
-        /// through, so a server refusing everything never marks the whole export as failed.
-        var refusals: [(entry: MessageEntry, target: [String], text: String)] = []
-        func settleRefusals() throws {
-            for refusal in refusals {
-                try keepLocally(refusal.entry, target: refusal.target)
-                try journal(.failed(target: refusal.target.joined(separator: "/"), hash: refusal.entry.hash, reason: refusal.text))
-                summary.failed += 1
-            }
-            refusals.removeAll()
+        let (run, units) = try await prepare(held: held, client: &client)
+        await run.report(folder: nil)
+        let workers = min(max(1, options.connections), units)
+        if workers > 0 {
+            try await upload(run, workers: workers, first: client)
+        } else {
+            await client.logout()
         }
-
-        for (target, entries) in state.messagesByTarget() {
-            try Task.checkCancellation()
-            let path = target.joined(separator: "/")
-            let (mailbox, separator, created) = try await withRetry(&client) { client in
-                try await self.ensureFolder(target, client: client)
-            }
-            summary.foldersCreated += created
-            // What the folder held before this run, and what this run has accounted for since.
-            var present = held[path] ?? PresentSet()
-            var accounted = PresentSet()
-            var done = 0
-            progress(UploadProgress(folder: path, done: 0, total: entries.count, bytes: bytes))
-            for entry in entries {
-                try Task.checkCancellation()
-                defer {
-                    done += 1
-                    progress(UploadProgress(folder: path, done: done, total: entries.count, bytes: bytes))
-                }
-                let uploadKey = UploadKey(target: path, hash: entry.hash)
-                let key = Self.key(entry, state)
-                if uploaded.contains(uploadKey) {
-                    summary.alreadyThere += 1
-                    continue
-                }
-                if present.take(key) {
-                    accounted.add(key)
-                    summary.alreadyThere += 1
-                    continue
-                }
-                let raw = try store.read(entry.hash)
-                let flags = state.flags(for: entry, in: target)
-                let date = state.internalDate(for: entry)?.serverMessageDate
-                do {
-                    var retried = false
-                    try await withRetry(&client) { client in
-                        if retried {
-                            // The connection dropped mid-APPEND: it may have landed. It did if the
-                            // folder now holds more copies than this run has accounted for.
-                            let now = try await self.presentMessages(in: mailbox, client: client)
-                            if now.count(key) > accounted.count(key) + present.count(key) { return }
-                        }
-                        retried = true
-                        try await client.append(to: target, separator: separator, message: ByteBuffer(bytes: raw),
-                                                flags: flags, date: date)
-                    }
-                    try journal(.uploaded(target: path, hash: entry.hash))
-                    uploaded.insert(uploadKey)
-                    accounted.add(key)
-                    summary.uploaded += 1
-                    bytes += raw.count
-                    try settleRefusals()
-                } catch let IMAPError.commandFailed(command, _, text) where command.hasPrefix("APPEND") {
-                    if text.localizedCaseInsensitiveContains("quota") {
-                        throw UploadError.stoppedByServer(text)
-                    }
-                    // Probably iCloud refusing this one message (for example, too large). Kept in
-                    // "Not uploaded" once a later message gets through.
-                    refusals.append((entry, target, text))
-                    if refusals.count >= options.maxConsecutiveRefusals {
-                        throw UploadError.stoppedByServer(text)
-                    }
-                }
-                if options.delayBetweenMessages > .zero { try await Task.sleep(for: options.delayBetweenMessages) }
-            }
-        }
-        try settleRefusals()
-        await client.logout()
-        return summary
+        return try await run.finish()
     }
 
     /// Finds the iCloud folder for `target`, creating it and any missing parents.
@@ -306,14 +237,14 @@ public final class Uploader: @unchecked Sendable {
 
     // MARK: Duplicate detection (D-011)
 
-    struct PresenceKey: Hashable {
+    struct PresenceKey: Hashable, Sendable {
         var messageID: String
         var size: Int
         var date: Int
     }
 
     /// A multiset of what a folder already holds, so N identical messages need N copies.
-    struct PresentSet {
+    struct PresentSet: Sendable {
         var counts: [PresenceKey: Int] = [:]
         mutating func add(_ key: PresenceKey) { counts[key, default: 0] += 1 }
         func count(_ key: PresenceKey) -> Int { counts[key] ?? 0 }
@@ -401,5 +332,178 @@ public final class Uploader: @unchecked Sendable {
                 do { client = try await connect() } catch let reconnectError where Exporter.isTransient(reconnectError) {}
             }
         }
+    }
+}
+
+// MARK: Parallel upload (D-018)
+
+extension Uploader {
+    /// Messages for one folder that share a presence key, uploaded in order by one connection.
+    /// Keeping same-key messages on one connection means a retry after a dropped APPEND can tell
+    /// from the folder's count whether its own copy landed, with no other connection adding the
+    /// same key at the same time.
+    struct WorkUnit: Sendable {
+        var target: [String]
+        var path: String
+        var mailbox: ListedMailbox
+        var separator: Character
+        var key: PresenceKey
+        var entries: [MessageEntry]
+    }
+
+    /// Creates every folder and decides what is already there before uploading anything, so the
+    /// connections afterwards only ever APPEND. Returns the shared run and how many units it holds.
+    private func prepare(held: [String: PresentSet], client: inout IMAPClient) async throws -> (UploadRun, Int) {
+        var summary = UploadSummary(uploaded: 0, alreadyThere: 0, failed: 0, foldersCreated: [])
+        var units: [WorkUnit] = []
+        var present: [String: PresentSet] = [:]
+        var accounted: [String: PresentSet] = [:]
+        var total = 0
+        for (target, entries) in state.messagesByTarget() {
+            try Task.checkCancellation()
+            let path = target.joined(separator: "/")
+            let (mailbox, separator, created) = try await withRetry(&client) { client in
+                try await self.ensureFolder(target, client: client)
+            }
+            summary.foldersCreated += created
+            total += entries.count
+            // What the folder held before this run, and what this run has accounted for since.
+            var left = held[path] ?? PresentSet()
+            var taken = PresentSet()
+            var unitIndex: [PresenceKey: Int] = [:]
+            for entry in entries {
+                let key = Self.key(entry, state)
+                if uploaded.contains(UploadKey(target: path, hash: entry.hash)) {
+                    summary.alreadyThere += 1
+                } else if left.take(key) {
+                    taken.add(key)
+                    summary.alreadyThere += 1
+                } else if let i = unitIndex[key] {
+                    units[i].entries.append(entry)
+                } else {
+                    unitIndex[key] = units.count
+                    units.append(WorkUnit(target: target, path: path, mailbox: mailbox, separator: separator,
+                                          key: key, entries: [entry]))
+                }
+            }
+            present[path] = left
+            accounted[path] = taken
+        }
+
+        let run = UploadRun(uploader: self, units: units, present: present, accounted: accounted,
+                            summary: summary, total: total, maxRefusals: options.maxConsecutiveRefusals,
+                            progress: progress)
+        return (run, units.count)
+    }
+
+    /// Runs `workers` connections until the queue is empty. The first reuses `first`; one that
+    /// cannot connect is dropped and the others carry on.
+    private func upload(_ run: UploadRun, workers: Int, first: IMAPClient) async throws {
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for index in 0..<workers {
+                group.addTask {
+                    var worker: IMAPClient
+                    if index == 0 {
+                        worker = first
+                    } else {
+                        do {
+                            worker = try await self.connect()
+                        } catch is CancellationError {
+                            return
+                        } catch {
+                            // iCloud may cap connections per account. The others carry on.
+                            self.progress(UploadProgress(folder: nil, done: 0, total: 0, bytes: 0,
+                                                         message: "Using fewer connections: \(error)"))
+                            return
+                        }
+                    }
+                    do {
+                        try await self.work(run, client: &worker)
+                    } catch {
+                        await worker.close()
+                        throw error
+                    }
+                    await worker.logout()
+                    await worker.close()
+                }
+            }
+            try await group.waitForAll()
+        }
+    }
+
+    /// One connection's loop: takes units until none are left.
+    private func work(_ run: UploadRun, client: inout IMAPClient) async throws {
+        while let unit = await run.next() {
+            for entry in unit.entries {
+                try Task.checkCancellation()
+                let raw = try store.read(entry.hash)
+                let flags = state.flags(for: entry, in: unit.target)
+                let date = state.internalDate(for: entry)?.serverMessageDate
+                do {
+                    var retried = false
+                    try await withRetry(&client) { client in
+                        if retried {
+                            // The connection dropped mid-APPEND: it may have landed. It did if the
+                            // folder now holds more copies than this run has accounted for.
+                            let now = try await self.presentMessages(in: unit.mailbox, client: client)
+                            if now.count(unit.key) > (await run.expected(unit.key, in: unit.path)) { return }
+                        }
+                        retried = true
+                        try await self.appendPacing {
+                            try await client.append(to: unit.target, separator: unit.separator,
+                                                    message: ByteBuffer(bytes: raw), flags: flags, date: date)
+                        }
+                    }
+                    try await run.uploaded(entry, unit: unit, bytes: raw.count)
+                } catch let IMAPError.commandFailed(command, _, text) where command.hasPrefix("APPEND") {
+                    if text.localizedCaseInsensitiveContains("quota") {
+                        throw UploadError.stoppedByServer(text)
+                    }
+                    // Probably iCloud refusing this one message (for example, too large). Kept in
+                    // "Not uploaded" once a later message gets through.
+                    try await run.refused(entry, unit: unit, text: text)
+                }
+                if options.delayBetweenMessages > .zero { try await Task.sleep(for: options.delayBetweenMessages) }
+            }
+        }
+    }
+
+    /// Runs one APPEND, waiting and trying again while iCloud says it is busy. That is
+    /// throttling, not a refusal of this message, so it must not end up in "Not uploaded".
+    /// After `maxRetries` waits it gives up and stops the run.
+    private func appendPacing(_ append: () async throws -> Void) async throws {
+        var attempt = 0
+        while true {
+            do {
+                return try await append()
+            } catch let IMAPError.commandFailed(command, _, text) where command.hasPrefix("APPEND") && Self.isBusy(text) {
+                guard attempt < options.maxRetries else { throw UploadError.stoppedByServer(text) }
+                attempt += 1
+                let delay = options.retryBaseDelay * (1 << (attempt - 1))
+                progress(UploadProgress(folder: nil, done: 0, total: 0, bytes: 0,
+                                        message: "iCloud is busy (\(text)); waiting \(delay)"))
+                try await Task.sleep(for: delay)
+            }
+        }
+    }
+
+    /// Whether a NO to APPEND means "slow down" rather than "not this message": "[UNAVAILABLE]",
+    /// "try again later" and the like. Not "[LIMIT]", which can also mean the message is too big,
+    /// and not anything about quota, which waiting will not fix.
+    static func isBusy(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        guard !lower.contains("quota") else { return false }
+        return ["[unavailable]", "[inuse]", "try again", "throttl", "rate limit"].contains { lower.contains($0) }
+    }
+
+    /// Only called from `UploadRun`, which serialises them: the journal and `uploaded` have one writer.
+    func recordUploaded(_ entry: MessageEntry, path: String) throws {
+        try journal(.uploaded(target: path, hash: entry.hash))
+        uploaded.insert(UploadKey(target: path, hash: entry.hash))
+    }
+
+    func recordRefused(_ entry: MessageEntry, target: [String], text: String) throws {
+        try keepLocally(entry, target: target)
+        try journal(.failed(target: target.joined(separator: "/"), hash: entry.hash, reason: text))
     }
 }

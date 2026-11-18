@@ -97,7 +97,7 @@ final class UploadPage: Page {
         if let p = session.uploadProgress, let folder = p.folder, p.total > 0 {
             setVisible(progress, true)
             gtk_progress_bar_set_fraction(cast(progress), Double(p.done) / Double(p.total))
-            gtk_progress_bar_set_text(cast(progress), "\(folder): \(p.done.formatted()) of \(p.total.formatted())")
+            gtk_progress_bar_set_text(cast(progress), "\(p.done.formatted()) of \(p.total.formatted()) messages (now \(folder))")
         } else {
             setVisible(progress, false)
         }
