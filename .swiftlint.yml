@@ -2,9 +2,12 @@ included:
   - Sources
   - Tests
   - App
+  - Linux/Sources
+  - Linux/Tests
 excluded:
   - .build
   - build
+  - Linux/.build
 line_length:
   warning: 160
   error: 200

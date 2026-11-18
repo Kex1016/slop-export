@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Slop Export
+GenericName=Mail Export
+Comment=Copy your Proton Mail into iCloud Mail
+Exec=slop-export-gtk
+Icon=mail-send-receive
+Terminal=false
+Categories=Network;Email;GTK;
+Keywords=Proton;iCloud;mail;export;IMAP;
+StartupNotify=true
+StartupWMClass=slop-export-gtk

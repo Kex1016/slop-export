@@ -10,3 +10,4 @@ build/
 export/
 exports/
 __pycache__/
+dist/
