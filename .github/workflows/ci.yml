@@ -143,7 +143,7 @@ jobs:
         if: inputs.version != ''
         env:
           VERSION: ${{ inputs.version }}
-        run: scripts/set-version.sh "$VERSION" "$GITHUB_RUN_NUMBER"
+        run: scripts/set-version.sh "$VERSION"
       - name: Build and package
         working-directory: slop-export
         run: scripts/package-deb.sh dist
@@ -172,6 +172,13 @@ jobs:
           apt-get update -qq
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ./dist/slop-export_*.deb >/dev/null
           slop-export-gtk --version
+      - name: Check the package carries the release version
+        if: inputs.version != ''
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          dpkg-query -W -f '${Version}\n' slop-export | grep -qx "$VERSION"
+          slop-export-gtk --version | grep -qx "slop-export-gtk $VERSION"
       - name: Install the fixtures and a headless desktop
         run: |
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
@@ -199,7 +206,7 @@ jobs:
         if: inputs.version != ''
         env:
           VERSION: ${{ inputs.version }}
-        run: scripts/set-version.sh "$VERSION" "$GITHUB_RUN_NUMBER"
+        run: scripts/set-version.sh "$VERSION"
       - name: Lint
         run: swiftlint lint --reporter github-actions-logging
       - name: Core unit tests
@@ -227,6 +234,7 @@ jobs:
         run: |
           PLIST=build/Build/Products/Release/SlopExport.app/Contents/Info.plist
           /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST" | tee /dev/stderr | grep -qx "$VERSION"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$PLIST" | tee /dev/stderr | grep -qx "$VERSION"
       - name: Package
         run: scripts/package-app.sh build/Build/Products/Release/SlopExport.app dist
       - uses: actions/upload-artifact@v4

@@ -53,7 +53,7 @@ These will become full entries when their phase starts:
   1. On GitHub, open the repository's **Actions** tab and click **Release** in the list on the left.
   2. Click **Run workflow**. Leave "Use workflow from" on `main`, type the version (for example `0.2.0`, without the `v`), and tick "Mark as a pre-release" or "Save as a draft" if you want. Click **Run workflow**.
   3. Wait about 30 minutes. The run checks the version, runs every CI job with the version stamped in, then publishes `v0.2.0`.
-- Expected: the Releases page shows "Slop Export 0.2.0" with `SlopExport.dmg`, `SlopExport.zip`, `slop-export_0.2.0_amd64.deb` and `SHA256SUMS.txt`. In the downloaded app, Slop Export › About shows 0.2.0. If any job fails, nothing is published and no tag is made; just fix it and run again with the same version.
+- Expected: the Releases page shows "Slop Export 0.2.0" with `SlopExport.dmg`, `SlopExport.zip`, `slop-export_0.2.0_amd64.deb` and `SHA256SUMS.txt`. In the downloaded app, Slop Export › About shows 0.2.0. If any job fails, nothing is published and no tag is made, so you can run again with the same version once it is fixed. If you ticked "Save as a draft", publish or delete that draft before running the same version again.
 - Report back: "released 0.2.0", or the name of the failed job. Builds stay ad-hoc signed until you tell the agents you have an Apple Developer account (see "Known upcoming steps").
 - Result:
 
@@ -64,7 +64,7 @@ These will become full entries when their phase starts:
 - Why David: his device and his Bridge; human judgement on how the app looks on his desktop
 - Before you start: Proton Mail Bridge for Linux installed, signed in and synced, and its certificate exported (Bridge › Settings › Advanced settings › Export TLS certificates). Until a release with the `.deb` is published (MT-010), download `slop-export-deb` from the latest green CI run on GitHub (Actions › CI › the run › Artifacts) and unzip it.
 - Steps:
-  1. In a terminal in the download folder: `sudo apt install ./slop-export_0.1.0_amd64.deb`. (Or double-click the `.deb` and click Install.)
+  1. In a terminal in the download folder: `sudo apt install ./slop-export_*_amd64.deb`. (Or double-click the `.deb` and click Install.)
   2. Open **Slop Export** from the applications menu.
   3. In Connect, enter the Bridge user name and password and choose the certificate, then **Connect and scan**. If the keyring asks to unlock or to create a keyring, allow it.
   4. Check the Scan list. Optional: Export into a folder with enough space and run Verify with only "Compare with Bridge's live counts" on.
@@ -86,7 +86,7 @@ These will become full entries when their phase starts:
   4. Wait about 15 minutes. The CI run for the tag builds the app and attaches `SlopExport.dmg`, `SlopExport.zip` and `SHA256SUMS.txt` to the release.
 - Expected: the release has the three files. The README's install link then points to it.
 - Report back: "released", or the error from the CI run if the files do not appear.
-- Result: 2026-11-03, passed. "Slop Export 0.1.0" is on the Releases page. Later releases use the Release workflow (MT-010, D-017).
+- Result: 2026-11-03, passed. Seen by an agent on 2026-11-18: "Slop Export 0.1.0" was published on the Releases page on 2026-11-03. Later releases use the Release workflow (MT-010, D-017).
 
 ### MT-007: Verify against your real account and sign off
 - Status: pending
