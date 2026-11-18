@@ -32,20 +32,25 @@ final class UploadIntegrationTests: XCTestCase {
     }
 
     private func uploader(_ exportDir: URL, account n: Int, connections: Int = Uploader.Options().connections,
-                          maxLogins: Int = .max,
+                          maxLogins: Int = .max, configure: (inout Uploader.Options) -> Void = { _ in },
+                          onLogin: @escaping @Sendable (Int, IMAPClient) -> Void = { _, _ in },
                           progress: @escaping @Sendable (UploadProgress) -> Void = { _ in }) throws -> Uploader {
         let fx = try FixtureServer.load("icloud")
         let endpoint = try icloudEndpoint(fx)
         let user = try account(n)
         var options = Uploader.Options()
         options.connections = connections
+        configure(&options)
         let logins = Counter()
         return try Uploader(exportDirectory: exportDir, options: options, connect: {
             // Stands in for iCloud turning away connections over its per-account limit.
-            guard logins.increment() <= maxLogins else {
+            let number = logins.increment()
+            guard number <= maxLogins else {
                 throw IMAPError.commandFailed(command: "LOGIN", status: "NO", text: "[LIMIT] too many connections")
             }
-            return try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: fx.password)
+            let client = try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: fx.password)
+            onLogin(number, client)
+            return client
         }, progress: progress)
     }
 
@@ -139,6 +144,31 @@ final class UploadIntegrationTests: XCTestCase {
         XCTAssertEqual(a, b, "same folders, messages, sizes, dates and flags either way")
     }
 
+    func testAConnectionLostForGoodHandsItsWorkToTheOthers() async throws {
+        let exportDir = try await export()
+        // The second connection is cut a moment in, and iCloud refuses to let it back in (only
+        // four logins work). Whatever it was doing is finished by the other three.
+        let notes = Notes()
+        let up = try uploader(exportDir, account: 10, connections: 4, maxLogins: 4, configure: {
+            $0.appendInterval = .milliseconds(100)
+            $0.retryBaseDelay = .milliseconds(50)
+        }, onLogin: { number, client in
+            guard number == 2 else { return }
+            Task {
+                try await Task.sleep(for: .milliseconds(250))
+                await client.close()
+            }
+        }, progress: { if let message = $0.message { notes.add(message) } })
+        let summary = try await up.run()
+        XCTAssertEqual(summary.uploaded, 13)
+        XCTAssertEqual(summary.failed, 0)
+        XCTAssertTrue(notes.all.contains { $0.contains("fewer connections") }, notes.all.joined(separator: "\n"))
+        let after = try await icloudFolders(account: 10)
+        XCTAssertEqual(after.values.map(\.count).reduce(0, +), 13)
+        let again = try await uploader(exportDir, account: 10).run()
+        XCTAssertEqual(again.alreadyThere, 13)
+    }
+
     func testStoppedPartWayThenResumedHasNoDuplicates() async throws {
         let exportDir = try await export()
         // Stop as soon as a few messages are in, like David pressing Pause mid-run.
@@ -168,6 +198,7 @@ final class UploadIntegrationTests: XCTestCase {
         XCTAssertTrue(Uploader.isBusy("[UNAVAILABLE] Server busy, try again later"))
         XCTAssertTrue(Uploader.isBusy("Rate limit exceeded"))
         XCTAssertFalse(Uploader.isBusy("[LIMIT] Message too large"))
+        XCTAssertFalse(Uploader.isBusy("[LIMIT] Message too large, try again with a smaller one"))
         XCTAssertFalse(Uploader.isBusy("[OVERQUOTA] Quota exceeded"))
         XCTAssertFalse(Uploader.isBusy("Over quota, try again later"), "waiting does not fix quota")
     }
@@ -199,6 +230,22 @@ private final class TaskBox: @unchecked Sendable {
         defer { lock.unlock() }
         cancelled = true
         task?.cancel()
+    }
+}
+
+/// Collects progress messages from several connections.
+private final class Notes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var messages: [String] = []
+    func add(_ message: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        messages.append(message)
+    }
+    var all: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return messages
     }
 }
 

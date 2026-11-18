@@ -179,12 +179,15 @@ struct UploadCommand: AsyncParsableCommand {
     @Option(help: "How many connections upload at once (1 to 8).") var connections = 4
     @Flag(help: "Actually write to iCloud. Without it, only reports what would happen.") var write = false
 
+    func validate() throws {
+        guard (1...8).contains(connections) else { throw ValidationError("--connections must be between 1 and 8.") }
+    }
+
     func run() async throws {
         let password = try DefaultSecrets().require(.icloud, account: user)
         var endpoint = ICloudSettings(host: host, port: port, user: user).endpoint
         if let pinCert { endpoint.trust = .pinned(try PinnedCertificate(contentsOf: URL(fileURLWithPath: pinCert))) }
         let user = self.user
-        guard (1...8).contains(connections) else { throw ValidationError("--connections must be between 1 and 8.") }
         var options = Uploader.Options()
         options.connections = connections
         let uploader = try Uploader(exportDirectory: URL(fileURLWithPath: export), options: options, connect: { [endpoint] in

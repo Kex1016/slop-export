@@ -306,7 +306,8 @@ struct UploadView: View {
                     } currentValueLabel: {
                         Text("\(progress.done.formatted()) of \(progress.total.formatted())")
                     }
-                } else if let message = model.uploadProgress?.message {
+                }
+                if let message = model.uploadProgress?.message {
                     Text(message).foregroundStyle(.secondary)
                 }
                 if let summary = model.uploadSummary {

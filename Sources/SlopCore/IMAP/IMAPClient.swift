@@ -118,6 +118,7 @@ public actor IMAPClient {
     private let ownsGroup: Bool
     private var tagCounter = 0
     public private(set) var capabilities: Set<String> = []
+    private var isClosed = false
     /// How long the server may stay silent during a command.
     public var commandTimeout: TimeAmount = .seconds(120)
 
@@ -247,7 +248,11 @@ public actor IMAPClient {
         }
     }
 
+    /// Safe to call more than once. Commands sent afterwards fail at once with `connectionClosed`
+    /// (a retry then reconnects) instead of waiting on an event loop that is already gone.
     public func close() async {
+        guard !isClosed else { return }
+        isClosed = true
         _ = try? await channel.close()
         if ownsGroup { try? await group.shutdownGracefully() }
     }
@@ -278,6 +283,8 @@ public actor IMAPClient {
 
     /// Sends a command and returns its result whatever the tagged status was.
     private func sendUnchecked(tag: String, parts: [CommandStreamPart], timeout: TimeAmount? = nil) async throws -> CommandResult {
+        // After close() the event loop is gone, and a promise made on it would never complete.
+        guard !isClosed else { throw IMAPError.connectionClosed }
         let promise = channel.eventLoop.makePromise(of: CommandResult.self)
         channel.writeAndFlush(CollectorRequest.command(tag: tag, parts: parts, timeout: timeout ?? commandTimeout, promise: promise),
                               promise: nil)
