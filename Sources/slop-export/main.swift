@@ -176,20 +176,27 @@ struct UploadCommand: AsyncParsableCommand {
     @Option(help: "iCloud IMAP host.") var host = "imap.mail.me.com"
     @Option(help: "iCloud IMAP port (implicit TLS).") var port = 993
     @Option(help: "For tests: trust exactly this certificate instead of the system trust store.") var pinCert: String?
+    @Option(help: "How many connections upload at once (1 to 8).") var connections = 4
     @Flag(help: "Actually write to iCloud. Without it, only reports what would happen.") var write = false
+
+    func validate() throws {
+        guard (1...8).contains(connections) else { throw ValidationError("--connections must be between 1 and 8.") }
+    }
 
     func run() async throws {
         let password = try DefaultSecrets().require(.icloud, account: user)
         var endpoint = ICloudSettings(host: host, port: port, user: user).endpoint
         if let pinCert { endpoint.trust = .pinned(try PinnedCertificate(contentsOf: URL(fileURLWithPath: pinCert))) }
         let user = self.user
-        let uploader = try Uploader(exportDirectory: URL(fileURLWithPath: export), connect: { [endpoint] in
+        var options = Uploader.Options()
+        options.connections = connections
+        let uploader = try Uploader(exportDirectory: URL(fileURLWithPath: export), options: options, connect: { [endpoint] in
             try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: password)
         }, progress: { p in
             if let message = p.message {
                 err(message)
             } else if let folder = p.folder, p.total > 0, p.done == p.total || p.done % 100 == 0 {
-                err("\(folder): \(p.done)/\(p.total)")
+                err("\(p.done)/\(p.total) (\(folder))")
             }
         })
         let plan = try await uploader.plan()

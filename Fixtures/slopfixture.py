@@ -12,7 +12,7 @@ Usage:
 
 After `up`, DIR/<kind>.json describes each server:
   {"host", "port", "security": "starttls"|"tls", "user", "password", "cert"}
-The icloud kind also accepts user-1@... through user-9@... with the same password,
+The icloud kind also accepts user-1@... through user-12@... with the same password,
 each with its own empty mailbox.
 
 No real mail, no real credentials: every message here is made up.
@@ -327,8 +327,8 @@ def up_one(base: Path, kind: str, attachment_bytes: int) -> dict[str, object]:
     implicit = kind == "icloud"
     user, password = (ICLOUD_USER, ICLOUD_PASSWORD) if implicit else (BRIDGE_USER, BRIDGE_PASSWORD)
     port = free_port()
-    # iCloud gets extra accounts (user-1 ... user-9) so tests can each start from an empty one.
-    users = [user] + ([user.replace("@", f"-{n}@") for n in range(1, 10)] if implicit else [])
+    # iCloud gets extra accounts (user-1 ... user-12) so tests can each start from an empty one.
+    users = [user] + ([user.replace("@", f"-{n}@") for n in range(1, 13)] if implicit else [])
     conf = write_config(d, port, implicit, users, password)
     for u in users:
         maildir = d / "home" / u / "Maildir"

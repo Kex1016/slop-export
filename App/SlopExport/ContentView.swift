@@ -302,11 +302,12 @@ struct UploadView: View {
             Section("Upload") {
                 if let progress = model.uploadProgress, let folder = progress.folder, progress.total > 0 {
                     ProgressView(value: Double(progress.done), total: Double(progress.total)) {
-                        Text(folder)
+                        Text("Uploading to \(folder)")
                     } currentValueLabel: {
                         Text("\(progress.done.formatted()) of \(progress.total.formatted())")
                     }
-                } else if let message = model.uploadProgress?.message {
+                }
+                if let message = model.uploadProgress?.message {
                     Text(message).foregroundStyle(.secondary)
                 }
                 if let summary = model.uploadSummary {

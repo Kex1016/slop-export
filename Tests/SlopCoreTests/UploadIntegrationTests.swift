@@ -31,13 +31,34 @@ final class UploadIntegrationTests: XCTestCase {
         try FixtureServer.load("icloud").user.replacingOccurrences(of: "@", with: "-\(n)@")
     }
 
-    private func uploader(_ exportDir: URL, account n: Int) throws -> Uploader {
+    private func uploader(_ exportDir: URL, account n: Int, connections: Int = Uploader.Options().connections,
+                          maxLogins: Int = .max, configure: (inout Uploader.Options) -> Void = { _ in },
+                          onLogin: @escaping @Sendable (Int, IMAPClient) async -> Void = { _, _ in },
+                          progress: @escaping @Sendable (UploadProgress) -> Void = { _ in }) throws -> Uploader {
         let fx = try FixtureServer.load("icloud")
         let endpoint = try icloudEndpoint(fx)
         let user = try account(n)
-        return try Uploader(exportDirectory: exportDir, connect: {
-            try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: fx.password)
-        })
+        var options = Uploader.Options()
+        options.connections = connections
+        configure(&options)
+        let logins = Counter()
+        return try Uploader(exportDirectory: exportDir, options: options, connect: {
+            // Stands in for iCloud turning away connections over its per-account limit.
+            let number = logins.increment()
+            guard number <= maxLogins else {
+                throw IMAPError.commandFailed(command: "LOGIN", status: "NO", text: "[LIMIT] too many connections")
+            }
+            let client = try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: fx.password)
+            await onLogin(number, client)
+            return client
+        }, progress: progress)
+    }
+
+    /// Every folder with the (Message-ID, size, date) of what it holds, for comparing two accounts.
+    private func contents(account n: Int) async throws -> [String: [String]] {
+        try await icloudFolders(account: n).mapValues { records in
+            records.map { "\(Uploader.key($0))|\($0.flags.sorted())" }.sorted()
+        }
     }
 
     private func icloudFolders(account n: Int) async throws -> [String: [FetchRecord]] {
@@ -106,6 +127,91 @@ final class UploadIntegrationTests: XCTestCase {
         XCTAssertEqual(after.values.map(\.count).reduce(0, +), 13)
     }
 
+    func testOneConnectionAndSeveralGiveTheSameResult() async throws {
+        let exportDir = try await export()
+        let parallel = try await uploader(exportDir, account: 5, connections: 4).run()
+        let serialDir = dir.appendingPathComponent("serial")
+        try FileManager.default.copyItem(at: exportDir, to: serialDir)
+        try FileManager.default.removeItem(at: serialDir.appendingPathComponent("upload.jsonl"))
+        // Asks for four, but only the first login works, as if iCloud capped connections: the
+        // upload carries on over the one it has.
+        let serial = try await uploader(serialDir, account: 7, connections: 4, maxLogins: 1).run()
+        XCTAssertEqual(parallel.uploaded, 13)
+        XCTAssertEqual(serial.uploaded, 13)
+        let a = try await contents(account: 5)
+        let b = try await contents(account: 7)
+        XCTAssertEqual(a.values.map(\.count).reduce(0, +), 13)
+        XCTAssertEqual(a, b, "same folders, messages, sizes, dates and flags either way")
+    }
+
+    func testAConnectionLostForGoodHandsItsWorkToTheOthers() async throws {
+        let exportDir = try await export()
+        // The second connection is dead on arrival, and iCloud refuses to let it back in (only
+        // four logins work). Whatever it took on is finished by the other three.
+        let notes = Notes()
+        let up = try uploader(exportDir, account: 10, connections: 4, maxLogins: 4, configure: {
+            $0.appendInterval = .milliseconds(100)
+            $0.retryBaseDelay = .milliseconds(50)
+        }, onLogin: { number, client in
+            if number == 2 { await client.close() }
+        }, progress: { if let message = $0.message { notes.add(message) } })
+        let summary = try await up.run()
+        XCTAssertEqual(summary.uploaded, 13)
+        XCTAssertEqual(summary.failed, 0)
+        XCTAssertTrue(notes.all.contains { $0.contains("fewer connections") }, notes.all.joined(separator: "\n"))
+        let after = try await icloudFolders(account: 10)
+        XCTAssertEqual(after.values.map(\.count).reduce(0, +), 13)
+        let again = try await uploader(exportDir, account: 10).run()
+        XCTAssertEqual(again.alreadyThere, 13)
+    }
+
+    func testStoppedPartWayThenResumedHasNoDuplicates() async throws {
+        let exportDir = try await export()
+        // Stop as soon as a few messages are in, like David pressing Pause mid-run.
+        let handle = TaskBox()
+        let pausing = try uploader(exportDir, account: 9, connections: 4, progress: { p in
+            if p.message == nil, p.done >= 4 { handle.cancel() }
+        })
+        let task = Task { try await pausing.run() }
+        handle.set(task)
+        do {
+            _ = try await task.value
+            XCTFail("expected the run to stop part way")
+        } catch is CancellationError {}
+        let partial = try await icloudFolders(account: 9).values.map(\.count).reduce(0, +)
+        XCTAssertGreaterThan(partial, 0)
+        XCTAssertLessThan(partial, 13)
+        // Drop the journal too, as if the app was killed before writing it.
+        try FileManager.default.removeItem(at: exportDir.appendingPathComponent("upload.jsonl"))
+        let resumed = try await uploader(exportDir, account: 9).run()
+        XCTAssertEqual(resumed.uploaded, 13 - partial)
+        XCTAssertEqual(resumed.alreadyThere, partial)
+        let after = try await icloudFolders(account: 9)
+        XCTAssertEqual(after.values.map(\.count).reduce(0, +), 13)
+    }
+
+    func testAJournalledMessageUsesUpItsCopy() {
+        // Two exported messages with the same Message-ID, size and date. A was uploaded and
+        // journalled; B never was, so the folder holds one copy. B must not claim A's copy.
+        let a = MessageEntry(hash: "a", size: 10, messageID: "<same@x>", locations: [])
+        let b = MessageEntry(hash: "b", size: 10, messageID: "<same@x>", locations: [])
+        let key = Uploader.PresenceKey(messageID: "<same@x>", size: 10, date: 0)
+        var present = Uploader.PresentSet()
+        present.add(key)
+        let journal: Set<Uploader.UploadKey> = [Uploader.UploadKey(target: "INBOX", hash: "a")]
+        XCTAssertTrue(Uploader.alreadyThere(a, path: "INBOX", key: key, journal: journal, present: &present))
+        XCTAssertFalse(Uploader.alreadyThere(b, path: "INBOX", key: key, journal: journal, present: &present))
+    }
+
+    func testBusyAnswersAreNotRefusals() {
+        XCTAssertTrue(Uploader.isBusy("[UNAVAILABLE] Server busy, try again later"))
+        XCTAssertTrue(Uploader.isBusy("Rate limit exceeded"))
+        XCTAssertFalse(Uploader.isBusy("[LIMIT] Message too large"))
+        XCTAssertFalse(Uploader.isBusy("[LIMIT] Message too large, try again with a smaller one"))
+        XCTAssertFalse(Uploader.isBusy("[OVERQUOTA] Quota exceeded"))
+        XCTAssertFalse(Uploader.isBusy("Over quota, try again later"), "waiting does not fix quota")
+    }
+
     func testQuotaShortfall() {
         let plan = UploadPlan(folders: [.init(path: "INBOX", exists: true, toUpload: 1, alreadyThere: 0, bytes: 600)],
                               quotaUsed: 500, quotaLimit: 1000)
@@ -114,5 +220,52 @@ final class UploadIntegrationTests: XCTestCase {
         XCTAssertNil(fits.shortfall)
         let unknown = UploadPlan(folders: plan.folders, quotaUsed: nil, quotaLimit: nil)
         XCTAssertNil(unknown.shortfall)
+    }
+}
+
+/// Lets the progress callback cancel the task running the upload.
+private final class TaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<UploadSummary, Error>?
+    private var cancelled = false
+    func set(_ task: Task<UploadSummary, Error>) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.task = task
+        if cancelled { task.cancel() }
+    }
+    func cancel() {
+        lock.lock()
+        defer { lock.unlock() }
+        cancelled = true
+        task?.cancel()
+    }
+}
+
+/// Collects progress messages from several connections.
+private final class Notes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var messages: [String] = []
+    func add(_ message: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        messages.append(message)
+    }
+    var all: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return messages
+    }
+}
+
+/// A thread-safe counter for the connect closure.
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func increment() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        value += 1
+        return value
     }
 }
