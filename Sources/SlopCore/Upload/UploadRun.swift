@@ -40,8 +40,21 @@ actor UploadRun {
         self.progress = progress
     }
 
-    /// A connection is ready to take work.
-    func join() { active += 1 }
+    /// Why the latest connection dropped out, for the run's error if nobody is left to finish.
+    private var dropError: Error?
+
+    /// This many connections are starting.
+    func expect(_ count: Int) { active = count }
+
+    /// A connection could not start. Returns false if it was the last one, so the caller ends
+    /// the run with its error.
+    func leave(_ error: Error) -> Bool {
+        guard active > 1 else { return false }
+        active -= 1
+        dropError = error
+        report("Uploading over fewer connections: \(error)")
+        return true
+    }
 
     /// The next unit, or nil when there is none, which also ends the caller's share of the run.
     func next() -> Uploader.WorkUnit? {
@@ -57,13 +70,17 @@ actor UploadRun {
     /// A connection failed for good. If another one is still taking work, hands it what was
     /// left (checked before resending, as it may have landed) and returns true; otherwise the
     /// caller ends the run with its error.
-    func retire(leaving unit: Uploader.WorkUnit?) -> Bool {
+    func retire(leaving unfinished: (unit: Uploader.WorkUnit, index: Int)?, _ error: Error) -> Bool {
         guard active > 1 else { return false }
         active -= 1
-        if var unit {
-            unit.checkFirst = true
-            requeued.append(unit)
+        dropError = error
+        if let (unit, index) = unfinished {
+            var rest = unit
+            rest.entries = Array(unit.entries[index...])
+            rest.checkFirst = true
+            requeued.append(rest)
         }
+        report("Uploading over fewer connections: \(error)")
         return true
     }
 
@@ -101,6 +118,11 @@ actor UploadRun {
     }
 
     func finish() throws -> UploadSummary {
+        // Connections that dropped out can leave work behind if the others had already finished.
+        // Nothing is lost: the next run picks it up.
+        if !requeued.isEmpty || nextUnit < units.count {
+            throw dropError ?? IMAPError.connectionClosed
+        }
         for connection in refusals.keys { try settleRefusals(connection) }
         return summary
     }

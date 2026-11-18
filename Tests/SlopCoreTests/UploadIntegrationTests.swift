@@ -33,7 +33,7 @@ final class UploadIntegrationTests: XCTestCase {
 
     private func uploader(_ exportDir: URL, account n: Int, connections: Int = Uploader.Options().connections,
                           maxLogins: Int = .max, configure: (inout Uploader.Options) -> Void = { _ in },
-                          onLogin: @escaping @Sendable (Int, IMAPClient) -> Void = { _, _ in },
+                          onLogin: @escaping @Sendable (Int, IMAPClient) async -> Void = { _, _ in },
                           progress: @escaping @Sendable (UploadProgress) -> Void = { _ in }) throws -> Uploader {
         let fx = try FixtureServer.load("icloud")
         let endpoint = try icloudEndpoint(fx)
@@ -49,7 +49,7 @@ final class UploadIntegrationTests: XCTestCase {
                 throw IMAPError.commandFailed(command: "LOGIN", status: "NO", text: "[LIMIT] too many connections")
             }
             let client = try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: fx.password)
-            onLogin(number, client)
+            await onLogin(number, client)
             return client
         }, progress: progress)
     }
@@ -146,18 +146,14 @@ final class UploadIntegrationTests: XCTestCase {
 
     func testAConnectionLostForGoodHandsItsWorkToTheOthers() async throws {
         let exportDir = try await export()
-        // The second connection is cut a moment in, and iCloud refuses to let it back in (only
-        // four logins work). Whatever it was doing is finished by the other three.
+        // The second connection is dead on arrival, and iCloud refuses to let it back in (only
+        // four logins work). Whatever it took on is finished by the other three.
         let notes = Notes()
         let up = try uploader(exportDir, account: 10, connections: 4, maxLogins: 4, configure: {
             $0.appendInterval = .milliseconds(100)
             $0.retryBaseDelay = .milliseconds(50)
         }, onLogin: { number, client in
-            guard number == 2 else { return }
-            Task {
-                try await Task.sleep(for: .milliseconds(250))
-                await client.close()
-            }
+            if number == 2 { await client.close() }
         }, progress: { if let message = $0.message { notes.add(message) } })
         let summary = try await up.run()
         XCTAssertEqual(summary.uploaded, 13)
@@ -192,6 +188,19 @@ final class UploadIntegrationTests: XCTestCase {
         XCTAssertEqual(resumed.alreadyThere, partial)
         let after = try await icloudFolders(account: 9)
         XCTAssertEqual(after.values.map(\.count).reduce(0, +), 13)
+    }
+
+    func testAJournalledMessageUsesUpItsCopy() {
+        // Two exported messages with the same Message-ID, size and date. A was uploaded and
+        // journalled; B never was, so the folder holds one copy. B must not claim A's copy.
+        let a = MessageEntry(hash: "a", size: 10, messageID: "<same@x>", locations: [])
+        let b = MessageEntry(hash: "b", size: 10, messageID: "<same@x>", locations: [])
+        let key = Uploader.PresenceKey(messageID: "<same@x>", size: 10, date: 0)
+        var present = Uploader.PresentSet()
+        present.add(key)
+        let journal: Set<Uploader.UploadKey> = [Uploader.UploadKey(target: "INBOX", hash: "a")]
+        XCTAssertTrue(Uploader.alreadyThere(a, path: "INBOX", key: key, journal: journal, present: &present))
+        XCTAssertFalse(Uploader.alreadyThere(b, path: "INBOX", key: key, journal: journal, present: &present))
     }
 
     func testBusyAnswersAreNotRefusals() {

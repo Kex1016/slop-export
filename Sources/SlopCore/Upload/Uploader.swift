@@ -172,7 +172,7 @@ public final class Uploader: @unchecked Sendable {
             var already = 0
             var bytes = 0
             for entry in entries {
-                if uploaded.contains(UploadKey(target: path, hash: entry.hash)) || present.take(Self.key(entry, state)) {
+                if Self.alreadyThere(entry, path: path, key: Self.key(entry, state), journal: uploaded, present: &present) {
                     already += 1
                 } else {
                     toUpload += 1
@@ -254,6 +254,16 @@ public final class Uploader: @unchecked Sendable {
             counts[key] = n - 1
             return true
         }
+    }
+
+    /// Whether `entry` is already in the folder: journalled as uploaded, or matching a copy the
+    /// folder holds. A journalled entry also uses up its copy, so another entry with the same
+    /// key cannot claim it and be skipped while it is really missing.
+    static func alreadyThere(_ entry: MessageEntry, path: String, key: PresenceKey, journal: Set<UploadKey>,
+                             present: inout PresentSet) -> Bool {
+        let taken = present.take(key)
+        guard journal.contains(UploadKey(target: path, hash: entry.hash)) || taken else { return false }
+        return true
     }
 
     /// The key an exported message should have once it is in iCloud.
@@ -373,9 +383,13 @@ extension Uploader {
         for (target, entries) in state.messagesByTarget() {
             try Task.checkCancellation()
             let path = target.joined(separator: "/")
-            let known = listed
+            var known: [ListedMailbox]? = listed
             let found = try await withRetry(&client) { client in
-                try await self.ensureFolder(target, listed: known, separator: separator, client: client)
+                // A retry lists again: the failed attempt may have created some of the folders.
+                let current: [ListedMailbox]
+                if let known { current = known } else { current = try await client.list() }
+                known = nil
+                return try await self.ensureFolder(target, listed: current, separator: separator, client: client)
             }
             listed = found.listed
             summary.foldersCreated += found.created
@@ -385,7 +399,7 @@ extension Uploader {
             var unitIndex: [PresenceKey: Int] = [:]
             for entry in entries {
                 let key = Self.key(entry, state)
-                if uploaded.contains(UploadKey(target: path, hash: entry.hash)) || left.take(key) {
+                if Self.alreadyThere(entry, path: path, key: key, journal: uploaded, present: &left) {
                     summary.alreadyThere += 1
                 } else if let i = unitIndex[key] {
                     units[i].entries.append(entry)
@@ -405,31 +419,25 @@ extension Uploader {
     /// Runs `workers` connections until the queue is empty. The first reuses `first`. One that
     /// cannot connect, or loses its connection for good, drops out and the others carry on.
     func upload(_ run: UploadRun, workers: Int, first: IMAPClient) async throws {
+        // Every connection counts as taking work from the start, so the first one failing early
+        // can hand its work to the others while they are still logging in.
+        await run.expect(workers)
         try await withThrowingTaskGroup(of: Void.self) { group in
             for index in 0..<workers {
                 group.addTask {
                     var client: IMAPClient
-                    if index == 0 {
-                        client = first
-                    } else {
-                        do {
-                            client = try await self.connect()
-                        } catch is CancellationError {
-                            return
-                        } catch {
-                            // iCloud may cap connections per account.
-                            await run.report("Uploading over fewer connections: \(error)")
-                            return
-                        }
+                    do {
+                        if index == 0 { client = first } else { client = try await self.connect() }
+                    } catch {
+                        guard Self.canDropOut(error), await run.leave(error) else { throw error }
+                        return
                     }
-                    await run.join()
-                    var unfinished: WorkUnit?
+                    var unfinished: (unit: WorkUnit, index: Int)?
                     do {
                         try await self.work(run, connection: index, client: &client, unfinished: &unfinished)
                     } catch {
                         await client.close()
-                        guard Self.canDropOut(error), await run.retire(leaving: unfinished) else { throw error }
-                        await run.report("Uploading over fewer connections: \(error)")
+                        guard Self.canDropOut(error), await run.retire(leaving: unfinished, error) else { throw error }
                         return
                     }
                     await client.logout()
@@ -440,30 +448,32 @@ extension Uploader {
         }
     }
 
-    /// A connection problem, which the other connections can work around. Not a stop from
-    /// iCloud, a cancel, or a local file error, which would hit every connection the same way.
+    /// A connection problem, which the other connections can work around: a drop, a timeout,
+    /// iCloud turning a login away. Not a stop from iCloud, a cancel, a local file error, a
+    /// refused password or a changed certificate, which would hit every connection the same way
+    /// and must end the run with their own message.
     static func canDropOut(_ error: Error) -> Bool {
-        if error is UploadError || error is CancellationError { return false }
-        return error is IMAPError || Exporter.isTransient(error)
+        switch error {
+        case is UploadError, is CancellationError, IMAPError.tls(_), IMAPError.loginRejected(_): return false
+        case is IMAPError: return true
+        default: return Exporter.isTransient(error)
+        }
     }
 
-    /// One connection's loop: takes units until none are left. `unfinished` is what is left of
-    /// the current unit, for another connection to finish if this one fails.
+    /// One connection's loop: takes units until none are left. `unfinished` is the current unit
+    /// and the entry it is on, for another connection to finish if this one fails.
     private func work(_ run: UploadRun, connection: Int, client: inout IMAPClient,
-                      unfinished: inout WorkUnit?) async throws {
+                      unfinished: inout (unit: WorkUnit, index: Int)?) async throws {
         while let unit = await run.next() {
             for (i, entry) in unit.entries.enumerated() {
                 try Task.checkCancellation()
-                var rest = unit
-                rest.entries = Array(unit.entries[i...])
-                rest.checkFirst = i == 0 ? unit.checkFirst : false
-                unfinished = rest
+                unfinished = (unit, i)
                 let raw = try store.read(entry.hash)
                 let flags = state.flags(for: entry, in: unit.target)
                 let date = state.internalDate(for: entry)?.serverMessageDate
                 let report: @Sendable (String) async -> Void = { await run.report($0) }
                 do {
-                    var check = rest.checkFirst
+                    var check = i == 0 && unit.checkFirst
                     try await withRetry(&client, note: report) { client in
                         if check {
                             // An APPEND of this message was cut off: it may have landed. It did
