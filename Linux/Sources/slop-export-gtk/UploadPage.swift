@@ -63,7 +63,7 @@ final class UploadPage: Page {
             if session.isUploading { session.pauseUpload(); return }
             guard let count = session.uploadPlan?.messagesToUpload else { return }
             let ok = confirm(parent: self.window, title: "Upload \(count.formatted()) messages to iCloud?",
-                             message: "This adds mail to \(session.icloudUser). Nothing is deleted, and messages "
+                             message: "This adds mail to \(session.icloudAccount). Nothing is deleted, and messages "
                                  + "already there are skipped. You can pause and resume.",
                              action: "_Upload")
             if ok { session.startUpload() }

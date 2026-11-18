@@ -12,6 +12,7 @@ final class VerifyPage: Page {
     private let icloudCheck: Widget
     private let spinner: Widget
     private let verifyButton: Widget
+    private let notes: Widget
     private let empty: Widget
     private let result: Widget
     private let headline: Widget
@@ -38,6 +39,8 @@ final class VerifyPage: Page {
         form.full(icloudCheck)
         form.hint("Only reads. Without Bridge, the counts from the last export scan are used. "
                   + "The Apple Mail folders are checked when they have been built.")
+        notes = makeLabel(selectable: true)
+        form.full(notes)
         spinner = makeSpinner(label: "Verifying")
         verifyButton = makeButton("_Verify", classes: [StyleClass.suggested]) { session.runVerify() }
         form.full(buttonRow(leading: [spinner], trailing: [verifyButton]))
@@ -75,6 +78,9 @@ final class VerifyPage: Page {
     func refresh() {
         setSensitive(bridgeCheck, session.canVerifyBridge)
         setSensitive(icloudCheck, session.canVerifyICloud)
+        let noteLines = session.verifyNotes.map { "⚠ " + $0 }
+        setText(notes, noteLines.joined(separator: "\n"))
+        setVisible(notes, !noteLines.isEmpty)
         setSpinning(spinner, session.isVerifying)
         setSensitive(verifyButton, session.canVerify)
         setVisible(empty, !session.hasExistingExport && session.verifyReport == nil)

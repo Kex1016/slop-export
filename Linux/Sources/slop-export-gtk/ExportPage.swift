@@ -62,7 +62,7 @@ final class ExportPage: Page {
 
     func refresh() {
         setText(folder, session.exportFolder ?? "No folder chosen")
-        setSensitive(chooseButton, !session.isExporting)
+        setSensitive(chooseButton, session.canChooseExportFolder)
 
         let p = session.exportProgress
         setVisible(progress, p != nil)

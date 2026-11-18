@@ -1,6 +1,13 @@
 import Crypto
 import Foundation
 
+/// Folder names inside the export folder the user chooses. The macOS and Linux apps both use
+/// these, so an export folder made on one can be resumed on the other.
+public enum ExportLayout {
+    public static let exportFolderName = "Proton Export"
+    public static let mailboxFolderName = "Apple Mail Import"
+}
+
 public enum SlopVersion {
     public static let current = "0.1.0"
 }

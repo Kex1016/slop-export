@@ -86,7 +86,6 @@ final class MainWindow {
         guard let name = gtk_stack_get_visible_child_name(cast(stack)),
               let step = Step(rawValue: String(cString: name)), step != session.step else { return }
         session.step = step
-        session.refreshSavedPasswords()
     }
 
     /// Ctrl+1 to Ctrl+5 jump between steps (Command-1 to Command-5 on the Mac).

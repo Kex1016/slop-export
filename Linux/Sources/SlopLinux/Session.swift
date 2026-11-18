@@ -26,7 +26,14 @@ public final class Session {
     /// Called after any state change. The window coalesces these into one redraw.
     public var onChange: (() -> Void)?
 
-    public var step: Step = .connect { didSet { changed() } }
+    public var step: Step = .connect {
+        didSet {
+            // Every way of switching steps (sidebar, Ctrl+1-5) re-reads the keyring state, so a
+            // user name typed on another step shows the right "saved" state here.
+            if step != oldValue { refreshSavedPasswords() }
+            changed()
+        }
+    }
 
     private let settingsFile: SettingsFile?
     public private(set) var settings: AppSettings
@@ -39,12 +46,14 @@ public final class Session {
     public init(settingsFile: SettingsFile?, vault: PasswordVault,
                 icloudEndpoint: @escaping @Sendable (String) -> ServerEndpoint = { ICloudSettings(user: $0).endpoint }) {
         self.settingsFile = settingsFile
-        self.settings = settingsFile?.load() ?? AppSettings()
+        let loaded = settingsFile?.load() ?? (settings: AppSettings(), problem: nil)
+        self.settings = loaded.settings
         self.vault = vault
         self.icloudEndpoint = icloudEndpoint
         certificateFingerprint = Self.fingerprint(settings.certificateDER)
         refreshSavedPasswords()
         refreshExistingExport()
+        if let problem = loaded.problem { errors[.connect] = problem }
     }
 
     private func changed() { onChange?() }
@@ -187,21 +196,24 @@ public final class Session {
 
     /// Same names as the macOS app, so one export folder works on both.
     public nonisolated static func exportDirectory(in folder: String) -> URL {
-        URL(fileURLWithPath: folder, isDirectory: true).appendingPathComponent("Proton Export", isDirectory: true)
+        URL(fileURLWithPath: folder, isDirectory: true).appendingPathComponent(ExportLayout.exportFolderName, isDirectory: true)
     }
 
     public nonisolated static func mboxDirectory(in folder: String) -> URL {
-        URL(fileURLWithPath: folder, isDirectory: true).appendingPathComponent("Apple Mail Import", isDirectory: true)
+        URL(fileURLWithPath: folder, isDirectory: true).appendingPathComponent(ExportLayout.mailboxFolderName, isDirectory: true)
     }
 
     public func chooseExportFolder(_ path: String) {
-        guard !isExporting else { return }
+        guard canChooseExportFolder else { return }
         errors[.export] = nil
         update { $0.exportFolder = path }
         exportSummary = nil
         exportProgress = nil
         mboxResult = nil
         uploadPlan = nil
+        uploadSummary = nil
+        uploadProgress = nil
+        verifyReport = nil
         refreshExistingExport()
     }
 
@@ -211,7 +223,15 @@ public final class Session {
             atPath: Self.exportDirectory(in: folder).appendingPathComponent("journal.jsonl").path)
     }
 
-    public var canExport: Bool { exportFolder != nil && hasCertificate && !bridgeAccount.isEmpty && !isExporting }
+    /// Anything that reads or writes the export folder. Only one of these runs at a time, so an
+    /// export never appends to the journal while upload, verify or the mailbox build replay it.
+    public var isBusyWithExportFolder: Bool {
+        isExporting || isBuildingMailboxes || isPlanning || isUploading || isVerifying
+    }
+
+    public var canChooseExportFolder: Bool { !isBusyWithExportFolder }
+
+    public var canExport: Bool { exportFolder != nil && hasCertificate && !bridgeAccount.isEmpty && !isBusyWithExportFolder }
 
     /// Starts or resumes. Stopping and starting again is always safe: the journal in the export
     /// folder records what is done.
@@ -234,7 +254,8 @@ public final class Session {
                     try Exporter(directory: directory, connect: {
                         try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: password)
                     }, progress: { progress in
-                        Task { @MainActor in self.exportProgress = progress }
+                        // Updates queued before a pause must not bring the bar back afterwards.
+                        Task { @MainActor in if self.isExporting { self.exportProgress = progress } }
                     })
                 }.value
                 exportSummary = try await exporter.run()
@@ -260,7 +281,7 @@ public final class Session {
 
     /// Path A: Apple Mail mailboxes next to the export, off the main thread.
     public func buildMailboxes() {
-        guard let folder = settings.exportFolder, hasExistingExport, !isBuildingMailboxes, !isExporting else { return }
+        guard let folder = settings.exportFolder, hasExistingExport, !isBusyWithExportFolder else { return }
         isBuildingMailboxes = true
         errors[.export] = nil
         mailboxTask = Task {
@@ -290,9 +311,22 @@ public final class Session {
     public private(set) var isVerifying = false { didSet { changed() } }
     private var verifyTask: Task<Void, Never>?
 
-    public var canVerify: Bool { exportFolder != nil && hasExistingExport && !isVerifying && !isUploading && !isExporting }
+    public var canVerify: Bool { exportFolder != nil && hasExistingExport && !isBusyWithExportFolder }
     public var canVerifyBridge: Bool { hasCertificate && !bridgeAccount.isEmpty && hasSavedPassword }
     public var canVerifyICloud: Bool { !icloudAccount.isEmpty && hasSavedICloudPassword }
+
+    /// Comparisons that are ticked but cannot run, said in words so a passing report is never
+    /// mistaken for one that checked Bridge or iCloud.
+    public var verifyNotes: [String] {
+        var out: [String] = []
+        if verifyBridge, !canVerifyBridge {
+            out.append("Bridge will not be compared: save the Bridge password and certificate in Connect first. The last scan's counts are used.")
+        }
+        if verifyICloud, !canVerifyICloud {
+            out.append("iCloud will not be compared: enter the Apple ID and app-specific password in Upload first.")
+        }
+        return out
+    }
 
     /// Only reads: Bridge and iCloud are opened read-only (STATUS, EXAMINE, BODY.PEEK).
     public func runVerify() {
@@ -372,7 +406,7 @@ public final class Session {
     private var uploadTask: Task<Void, Never>?
 
     public var canPlanUpload: Bool {
-        exportFolder != nil && hasExistingExport && !icloudAccount.isEmpty && !isPlanning && !isUploading && !isExporting
+        exportFolder != nil && hasExistingExport && !icloudAccount.isEmpty && !isBusyWithExportFolder
     }
 
     /// The upload button needs a fresh dry run for this account that fits in iCloud.
@@ -390,7 +424,7 @@ public final class Session {
             try Uploader(exportDirectory: directory, connect: {
                 try await IMAPClient.connectAndLogin(to: endpoint, user: user, password: password)
             }, progress: { progress in
-                Task { @MainActor in self.uploadProgress = progress }
+                Task { @MainActor in if self.isUploading || self.isPlanning { self.uploadProgress = progress } }
             })
         }.value
     }
@@ -400,10 +434,14 @@ public final class Session {
         guard canPlanUpload, let folder = settings.exportFolder else { return }
         isPlanning = true
         errors[.upload] = nil
+        let account = icloudAccount
         uploadTask = Task {
             defer { isPlanning = false }
             do {
-                uploadPlan = try await makeUploader(folder: folder).plan()
+                let plan = try await makeUploader(folder: folder).plan()
+                // A plan is only good for the Apple ID and folder it was made for; if either
+                // changed while it ran, drop it so Upload stays off until a fresh check.
+                if icloudAccount == account, settings.exportFolder == folder { uploadPlan = plan }
             } catch {
                 errors[.upload] = String(describing: error)
             }

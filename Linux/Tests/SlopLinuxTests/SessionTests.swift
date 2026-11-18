@@ -86,7 +86,22 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(session.port, 1143)
 
         try Data("not json".utf8).write(to: settingsFile.url)
-        XCTAssertEqual(Session(settingsFile: settingsFile, vault: MemoryVault()).settings, AppSettings())
+        let damaged = Session(settingsFile: settingsFile, vault: MemoryVault())
+        XCTAssertEqual(damaged.settings, AppSettings())
+        XCTAssertNotNil(damaged.errors[.connect], "a damaged settings file is reported")
+        let aside = settingsFile.url.appendingPathExtension("damaged")
+        XCTAssertEqual(try String(contentsOf: aside, encoding: .utf8), "not json", "and kept, not overwritten")
+        damaged.host = "127.0.0.9"
+        XCTAssertEqual(try String(contentsOf: aside, encoding: .utf8), "not json")
+    }
+
+    @MainActor
+    func testTickedComparisonsThatCannotRunAreSpelledOut() async throws {
+        let session = Session(settingsFile: nil, vault: MemoryVault())
+        XCTAssertEqual(session.verifyNotes.count, 2)
+        session.verifyICloud = false
+        XCTAssertEqual(session.verifyNotes.count, 1)
+        XCTAssertTrue(session.verifyNotes[0].hasPrefix("Bridge will not be compared"))
     }
 
     @MainActor

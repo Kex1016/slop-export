@@ -220,11 +220,11 @@ final class AppModel {
     private(set) var isBuildingMailboxes = false
 
     nonisolated static func exportDirectory(in folder: URL) -> URL {
-        folder.appendingPathComponent("Proton Export", isDirectory: true)
+        folder.appendingPathComponent(ExportLayout.exportFolderName, isDirectory: true)
     }
 
     nonisolated static func mboxDirectory(in folder: URL) -> URL {
-        folder.appendingPathComponent("Apple Mail Import", isDirectory: true)
+        folder.appendingPathComponent(ExportLayout.mailboxFolderName, isDirectory: true)
     }
 
     func refreshExistingExport() {

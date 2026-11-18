@@ -45,10 +45,19 @@ public struct SettingsFile: Sendable {
         return SettingsFile(url: base.appendingPathComponent("slop-export/settings.json"))
     }
 
-    public func load() -> AppSettings {
-        guard let data = try? Data(contentsOf: url),
-              let settings = try? JSONDecoder().decode(AppSettings.self, from: data) else { return AppSettings() }
-        return settings
+    /// The saved settings, or defaults. A file that exists but cannot be read is moved aside
+    /// (to `settings.json.damaged`) rather than overwritten by the next save, and `problem` says so.
+    public func load() -> (settings: AppSettings, problem: String?) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return (AppSettings(), nil) }
+        do {
+            return (try JSONDecoder().decode(AppSettings.self, from: Data(contentsOf: url)), nil)
+        } catch {
+            let aside = url.appendingPathExtension("damaged")
+            try? FileManager.default.removeItem(at: aside)
+            let moved = (try? FileManager.default.moveItem(at: url, to: aside)) != nil
+            return (AppSettings(), "Could not read the saved settings (\(url.path)), so the defaults are shown. "
+                    + (moved ? "The old file was kept as \(aside.lastPathComponent)." : ""))
+        }
     }
 
     public func save(_ settings: AppSettings) throws {
@@ -57,7 +66,17 @@ public struct SettingsFile: Sendable {
         try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(settings).write(to: url, options: .atomic)
-        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        // Created as 0600 from the start, then renamed over the old file, so it is never readable
+        // by others, not even for a moment.
+        let temporary = dir.appendingPathComponent(".settings-\(UUID().uuidString).json")
+        guard fm.createFile(atPath: temporary.path, contents: try encoder.encode(settings),
+                            attributes: [.posixPermissions: 0o600]) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: temporary.path])
+        }
+        guard rename(temporary.path, url.path) == 0 else {
+            let code = errno
+            try? fm.removeItem(at: temporary)
+            throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+        }
     }
 }
